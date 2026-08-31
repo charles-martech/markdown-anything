@@ -608,6 +608,9 @@ def write_settings(values: dict) -> None:
         with os.fdopen(handle, "w", encoding="utf-8") as out:
             out.write(json.dumps(values))
     except OSError:
+        # A full or read-only disk. The answer is not worth refusing to run
+        # over: the app asks again next time, which is the safe way to be
+        # wrong — it never checks the network on an answer it does not have.
         pass
 
 
