@@ -12,7 +12,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="Document to Markdown"
 BUNDLE_ID="com.markdown.documenttomarkdown"
-VERSION="1.0.2"
+VERSION="1.0.3"
 
 DEST="${1:-/Applications}"
 if [ ! -w "$DEST" ]; then
