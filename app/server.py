@@ -44,10 +44,24 @@ IS_MAC = platform.system() == "Darwin"
 
 # Everything this app installs for itself lives here, never on the system.
 # Deleting this folder undoes every install the app has ever done.
-SUPPORT = (Path.home() / "Library/Application Support/Document to Markdown"
-           if IS_MAC else Path.home() / ".local/share/document-to-markdown")
+_DEFAULT_SUPPORT = (Path.home() / "Library/Application Support/Document to Markdown"
+                    if IS_MAC else Path.home() / ".local/share/document-to-markdown")
+# DOC2MD_HOME relocates everything this app installs and remembers. The server
+# it starts is a separate process, so this has to travel through the
+# environment rather than a module global.
+SUPPORT = Path(os.environ.get("DOC2MD_HOME") or _DEFAULT_SUPPORT)
 BIN_DIR = SUPPORT / "bin"
 PYLIB_DIR = SUPPORT / "python"
+# An app launched from Finder inherits a bare PATH (/usr/bin:/bin:/usr/sbin:
+# /sbin), not the PATH from a login shell, so tools installed by Homebrew are
+# invisible unless we go looking. LibreOffice is never on any PATH: it lives
+# inside its own application bundle.
+EXTRA_TOOL_DIRS = [
+    Path("/opt/homebrew/bin"), Path("/usr/local/bin"), Path("/opt/local/bin"),
+    Path("/usr/bin"), Path("/bin"), Path.home() / ".local/bin",
+    Path("/Applications/LibreOffice.app/Contents/MacOS"),
+    Path.home() / "Applications/LibreOffice.app/Contents/MacOS",
+]
 PANDOC_RELEASES = "https://api.github.com/repos/jgm/pandoc/releases/latest"
 PANDOC_FALLBACK = "3.1.11"
 LIBREOFFICE_PAGE = "https://www.libreoffice.org/download/download-libreoffice/"
@@ -141,17 +155,34 @@ def watchdog(server: ThreadingHTTPServer) -> None:
 # --------------------------------------------------------------------------
 
 def tool_path(name: str) -> str | None:
-    """Find a binary in the app's support folder first, then on the system."""
+    """Find a binary: our own copy, then PATH, then the usual Mac locations."""
     own = BIN_DIR / name
     if own.is_file() and os.access(own, os.X_OK):
         return str(own)
-    return shutil.which(name)
+    found = shutil.which(name)
+    if found:
+        return found
+    for directory in EXTRA_TOOL_DIRS:
+        candidate = directory / name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+def search_path() -> str:
+    """PATH for child processes: our bin, then everywhere a tool may live."""
+    parts = [str(BIN_DIR)]
+    parts += [str(d) for d in EXTRA_TOOL_DIRS if d.is_dir()]
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if entry and entry not in parts:
+            parts.append(entry)
+    return os.pathsep.join(parts)
 
 
 def child_env() -> dict:
     """Environment for the converter: our bin folder and libraries come first."""
     env = dict(os.environ)
-    env["PATH"] = f"{BIN_DIR}{os.pathsep}{env.get('PATH', '')}"
+    env["PATH"] = search_path()
     if PYLIB_DIR.is_dir():
         existing = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = (f"{PYLIB_DIR}{os.pathsep}{existing}" if existing
@@ -566,32 +597,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send({"error": "not found"}, 404)
 
 
-def main() -> int:
+def serve() -> int:
+    """The long-lived part: hold the port and answer the page."""
     if not CONVERTER.exists():
         print(f"Converter not found at {CONVERTER}", file=sys.stderr)
         return 2
-    running = existing_instance()
-    if running:
-        # Double-clicking the icon again should raise the page you already have,
-        # not start a second copy on a second port.
-        print(f"Already running at {running}")
-        if "--no-browser" not in sys.argv:
-            webbrowser.open(running)
-        return 0
-
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     port = server.server_address[1]
-    url = f"http://127.0.0.1:{port}/"
     try:
         SUPPORT.mkdir(parents=True, exist_ok=True)
         PORT_FILE.write_text(json.dumps({"port": port, "token": TOKEN}))
     except OSError:
         pass
-    print("Document to Markdown is running.")
-    print(f"  {url}")
+    print(f"Document to Markdown is running at http://127.0.0.1:{port}/")
     print("Close the page and quit from there, or press Ctrl+C here.")
-    if "--no-browser" not in sys.argv:
-        threading.Timer(0.4, lambda: webbrowser.open(url)).start()
     threading.Thread(target=watchdog, args=(server,), daemon=True).start()
     try:
         server.serve_forever()
@@ -600,6 +619,59 @@ def main() -> int:
     finally:
         PORT_FILE.unlink(missing_ok=True)
     return 0
+
+
+def launch() -> int:
+    """The part the app icon runs: open the page and get out of the way.
+
+    macOS keeps an app in its bouncing "launching" state until the process it
+    started finishes launching. A plain script app never registers with the
+    window server, so if this process stayed alive to serve HTTP, the icon
+    would bounce forever and a second click would do nothing. Instead the
+    server is started detached and this process exits within a second, which
+    also means every later click on the icon lands here again and simply
+    reopens the page of the server that is already running.
+    """
+    running = existing_instance()
+    if running:
+        webbrowser.open(running)
+        return 0
+
+    SUPPORT.mkdir(parents=True, exist_ok=True)
+    log = SUPPORT / "log.txt"
+    with log.open("ab") as handle:
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--serve"],
+                         stdout=handle, stderr=handle, stdin=subprocess.DEVNULL,
+                         start_new_session=True, cwd=str(ROOT))
+
+    for _ in range(100):  # up to ten seconds for the server to claim a port
+        time.sleep(0.1)
+        started = existing_instance()
+        if started:
+            webbrowser.open(started)
+            return 0
+    _dialog("Document to Markdown could not start.\n\nThe details are in:\n"
+            f"{log}")
+    return 1
+
+
+def _dialog(message: str) -> None:
+    if IS_MAC:
+        subprocess.run(["osascript", "-e",
+                        f'display dialog "{message}" buttons {{"OK"}} '
+                        'default button 1 with icon caution '
+                        'with title "Document to Markdown"'],
+                       capture_output=True)
+    else:
+        print(message, file=sys.stderr)
+
+
+def main() -> int:
+    if "--serve" in sys.argv:
+        return serve()
+    if "--no-browser" in sys.argv:      # tests and terminal use
+        return serve()
+    return launch()
 
 
 if __name__ == "__main__":

@@ -112,6 +112,28 @@ download instead of fetching it silently.
 "convert this folder to markdown", and the agent runs the converter with the
 right flags. Copy that folder to `~/.claude/skills/` to have it everywhere.
 
+## If something goes wrong
+
+**The icon does nothing.** The app keeps running in the background after you
+close its tab, and clicking the icon reopens that same page. If nothing opens
+at all, the server has stopped: open the app again, and if it still does
+nothing, look at `~/Library/Application Support/Document to Markdown/log.txt`.
+
+**It says a tool is missing that you know you installed.** An app opened from
+Finder does not see the same `PATH` as your Terminal, so the app looks in the
+usual places itself: Homebrew, MacPorts, `/usr/local/bin`, and inside
+`LibreOffice.app`. Anything installed somewhere unusual can be pointed at by
+launching the app from a terminal instead:
+`open -a "Document to Markdown"` inherits nothing, but
+`python3 "/Applications/Document to Markdown.app/Contents/Resources/app/server.py"`
+inherits your shell environment.
+
+**Stopping it completely.** Use the "Quit the app" button at the bottom of the
+page. It also stops itself after thirty idle minutes.
+
+**Removing it.** Delete the app from Applications, the Desktop shortcut, and
+`~/Library/Application Support/Document to Markdown`. Nothing else was touched.
+
 ## Contributing
 
 Bug reports about a format that converted badly are the most useful thing, and

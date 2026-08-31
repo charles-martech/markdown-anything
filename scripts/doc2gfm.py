@@ -133,6 +133,15 @@ BINARY_SKIP = {
     ".exe", ".dll", ".so", ".dylib", ".bin", ".db", ".sqlite", ".pyc",
 }
 
+# A GUI launcher hands us a bare PATH, and LibreOffice never appears on any
+# PATH at all: it lives inside its application bundle. Look there too.
+EXTRA_TOOL_DIRS = [
+    "/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin",
+    str(Path.home() / ".local/bin"),
+    "/Applications/LibreOffice.app/Contents/MacOS",
+    str(Path.home() / "Applications/LibreOffice.app/Contents/MacOS"),
+]
+
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\r(?!\n)")
 EM_DASH_RE = re.compile(r"\s*(?:—|–)\s*")
 
@@ -171,8 +180,20 @@ def sha256_of(path: Path) -> str:
     return h.hexdigest()
 
 
+def find_tool(binary: str) -> str | None:
+    """Absolute path of a tool, searching PATH and the usual Mac locations."""
+    found = shutil.which(binary)
+    if found:
+        return found
+    for directory in EXTRA_TOOL_DIRS:
+        candidate = Path(directory) / binary
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
 def have(binary: str) -> bool:
-    return shutil.which(binary) is not None
+    return find_tool(binary) is not None
 
 
 def run(cmd: list[str], *, timeout: int = 600) -> subprocess.CompletedProcess:
@@ -259,7 +280,8 @@ def route_for(path: Path) -> tuple[str, str] | None:
 
 def pandoc_gfm(args: argparse.Namespace, src: Path, fmt: str,
                media_dir: Path | None, job: Job) -> str:
-    cmd = ["pandoc", "--from", fmt, "--to", "gfm", "--markdown-headings=atx",
+    cmd = [find_tool("pandoc") or "pandoc",
+           "--from", fmt, "--to", "gfm", "--markdown-headings=atx",
            f"--wrap={args.wrap}"]
     if args.wrap == "auto":
         cmd.append(f"--columns={args.columns}")
@@ -277,11 +299,11 @@ def pandoc_gfm(args: argparse.Namespace, src: Path, fmt: str,
 
 def libreoffice_convert(args: argparse.Namespace, src: Path, target: str,
                         workdir: Path) -> Path:
-    if not (have("soffice") or have("libreoffice")):
+    binary = find_tool("soffice") or find_tool("libreoffice")
+    if binary is None:
         raise ConversionError(
             "LibreOffice not installed; needed for legacy Office formats "
             "(see scripts/setup.sh)")
-    binary = "soffice" if have("soffice") else "libreoffice"
     profile = workdir / "loprofile"
     out = workdir / "lo"
     out.mkdir(parents=True, exist_ok=True)
@@ -297,12 +319,13 @@ def libreoffice_convert(args: argparse.Namespace, src: Path, target: str,
 def convert_asciidoc(args: argparse.Namespace, src: Path, media_dir: Path | None,
                     job: Job, workdir: Path) -> str:
     """AsciiDoc: pandoc cannot read it, so asciidoctor renders DocBook first."""
-    if not have("asciidoctor"):
+    asciidoctor = find_tool("asciidoctor")
+    if asciidoctor is None:
         raise ConversionError(
             "asciidoctor not installed; needed for AsciiDoc input "
             "(gem install asciidoctor, or apt install asciidoctor)")
     docbook = workdir / "asciidoc.xml"
-    proc = run(["asciidoctor", "--backend", "docbook", "--out-file", "-",
+    proc = run([asciidoctor, "--backend", "docbook", "--out-file", "-",
                 str(src)], timeout=args.timeout)
     docbook.write_bytes(proc.stdout)
     job.warnings.append("rendered to DocBook by asciidoctor first")
@@ -556,11 +579,12 @@ def _pdf_via_markitdown(src: Path) -> str | None:
 
 
 def _pdf_via_pdftotext(args: argparse.Namespace, src: Path, job: Job) -> str:
-    if not have("pdftotext"):
+    pdftotext = find_tool("pdftotext")
+    if pdftotext is None:
         raise ConversionError(
             "no PDF engine available; install poppler-utils, pymupdf4llm or "
             "markitdown (see scripts/setup.sh)")
-    proc = run(["pdftotext", "-layout", "-enc", "UTF-8", str(src), "-"],
+    proc = run([pdftotext, "-layout", "-enc", "UTF-8", str(src), "-"],
                timeout=args.timeout)
     text = proc.stdout.decode("utf-8", "replace")
     pages = text.split("\f")
@@ -603,9 +627,10 @@ def convert_pdf(args: argparse.Namespace, src: Path, job: Job,
             job.warnings.append(f"pdf engine: {engine}")
             break
     if not body.strip():
-        if args.ocr and have("ocrmypdf"):
+        if args.ocr and find_tool("ocrmypdf"):
             ocred = workdir / "ocr.pdf"
-            run(["ocrmypdf", "--force-ocr", "--quiet", str(src), str(ocred)],
+            run([find_tool("ocrmypdf"), "--force-ocr", "--quiet",
+                 str(src), str(ocred)],
                 timeout=max(args.timeout, 1800))
             job.warnings.append("no embedded text; OCR applied")
             return _pdf_via_pdftotext(args, ocred, job)
@@ -633,7 +658,8 @@ def _csl_names(entry: dict, key: str) -> str:
 def convert_biblio(args: argparse.Namespace, src: Path, fmt: str,
                    job: Job) -> str:
     """Bibliography databases become a readable, sorted GFM reference list."""
-    proc = run(["pandoc", "--from", fmt, "--to", "csljson", "--", str(src)],
+    proc = run([find_tool("pandoc") or "pandoc",
+                "--from", fmt, "--to", "csljson", "--", str(src)],
                timeout=args.timeout)
     entries = json.loads(proc.stdout.decode("utf-8", "replace") or "[]")
     lines = ["# References", ""]

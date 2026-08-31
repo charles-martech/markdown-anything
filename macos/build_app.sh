@@ -12,7 +12,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="Document to Markdown"
 BUNDLE_ID="com.markdown.documenttomarkdown"
-VERSION="1.0.0"
+VERSION="1.0.2"
 
 DEST="${1:-/Applications}"
 if [ ! -w "$DEST" ]; then
@@ -39,6 +39,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <!-- No Dock tile: the launcher opens a browser page and exits straight away,
+       so a tile would appear and vanish for no reason. -->
+  <key>LSUIElement</key><true/>
 </dict>
 </plist>
 PLIST
@@ -70,7 +73,10 @@ if [ -z "$PY" ]; then
 fi
 
 cd "$RESOURCES" || fail "The app files could not be found. Reinstall the app."
-exec "$PY" app/server.py
+
+# This starts the server detached and returns immediately, so macOS never
+# leaves the app stuck in its launching state.
+"$PY" app/server.py || fail "Document to Markdown could not start. Open Terminal and run:\n\n$PY \"$RESOURCES/app/server.py\" --serve\n\nto see what went wrong."
 LAUNCHER
 chmod +x "$APP/Contents/MacOS/launcher"
 
