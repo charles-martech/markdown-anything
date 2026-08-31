@@ -38,6 +38,20 @@ if [ -z "$SOURCE" ]; then
   SOURCE="$TEMP/src"
 fi
 
+# An older copy may still be serving in the background. Ask it to stop, so the
+# icon opens the version we are about to install rather than the old one.
+INSTANCE="$HOME/Library/Application Support/Document to Markdown/instance.json"
+if [ -f "$INSTANCE" ] && command -v python3 >/dev/null 2>&1; then
+  python3 - "$INSTANCE" <<'STOP' >/dev/null 2>&1 || true
+import json, sys, urllib.request
+saved = json.load(open(sys.argv[1]))
+url = f"http://127.0.0.1:{saved['port']}/api/quit?token={saved['token']}"
+urllib.request.urlopen(urllib.request.Request(
+    url, data=b"{}", headers={"Content-Type": "application/json"}), timeout=2)
+STOP
+  say "Stopped the copy that was already running."
+fi
+
 say "Building the app..."
 APP="$(bash "$SOURCE/macos/build_app.sh")"
 
