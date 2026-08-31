@@ -17,14 +17,54 @@ files off their computer.
 ## What this app is, from a security point of view
 
 It converts documents you already have, on your own machine, and nothing about
-them leaves it. There is no account, no server, and no telemetry. Two things
-do reach the network, both only when you ask:
+them leaves it: no file, no file name, no fragment of the contents. There is no
+account, no server run by this project, and no telemetry of any kind. The
+converter never opens a network connection at all.
+
+Two things reach the network, and nothing else:
 
 - **Setup** downloads Pandoc from its official GitHub release, and the reader
   libraries from PyPI, into the app's own folder. Downloads are only accepted
   over HTTPS from GitHub's own hosts, and an archive that tries to write
   outside its own folder is discarded.
+- **Looking for a newer version** asks GitHub for the newest release tag and
+  compares it with this app's version. That request tells GitHub the IP address
+  it came from and nothing else: no document, no file name, no identifier of
+  the machine or the person. It exists so that fixes — including security
+  fixes — can reach people who already installed the app.
+
+  **Whether this happens on its own is the person's choice, asked once.** On
+  first run the app puts both options in front of them with the trade spelled
+  out, with neither preselected: check once a day, or check only when the
+  button is pressed. Until they answer, nothing is asked of the network. The
+  answer is stored in `settings.json` in the app's own folder and can be
+  changed at any time from the page.
 - **Nothing else.** The converter itself never opens a network connection.
+
+### Installing an update
+
+An update is a release archive of this repository, and it is code that will run
+on your machine, so it is treated as such:
+
+- Only tagged releases, only over HTTPS, only from GitHub's own hosts.
+- The tag has to be a version number and nothing else, because it is put into
+  a download URL.
+- It is unpacked a member at a time, each to a checked path, with links skipped.
+- The archive must contain the app's own files, or it is discarded unopened.
+- **The downloaded copy is started once, on its own, before it is trusted.** If
+  it does not come up, it is thrown away and the version you have keeps running.
+- Nothing installs without you pressing the button.
+
+An update never touches `/Applications`. It lands in the app's own folder, and
+the launcher prefers it — so if an update ever misbehaves, deleting
+`~/Library/Application Support/Document to Markdown/current` puts back the
+version that came with the app, with no terminal and no reinstall.
+
+The honest caveat: an app that can update itself is one that can be made to
+install something bad if this repository is ever taken over. That is the same
+trust the install line asks for, but it reaches people who installed long ago
+rather than only new arrivals. It is why the update path accepts releases only,
+never a branch, and never installs on its own.
 
 ### The local web page
 

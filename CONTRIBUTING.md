@@ -58,6 +58,15 @@ A format that needs its own reader gets a `convert_*` function and a branch in
 `convert_one`. Add it to `docs/formats.md` and to the fixtures in
 `scripts/selftest.sh` in the same change, so it stays working.
 
+## Versions
+
+`VERSION` at the root is the app's version, read at runtime so a running app can
+compare itself with a release. `BUNDLE_FORMAT` beside it covers the parts of the
+Mac bundle an in-app update cannot replace — the launcher, `Info.plist`, the
+icon. Change any of those three and bump it, or people will get new code running
+under an old launcher. `scripts/doc2gfm.py` has its own `VERSION`, which belongs
+to the converter's output, not to the app.
+
 ## House style
 
 - Plain language everywhere a person will read it: the interface, the report,
