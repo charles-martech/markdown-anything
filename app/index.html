@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Document to Markdown</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f6f4; --card: #ffffff; --ink: #1b1b19; --muted: #6b6b63;
+    --line: #e2e2dc; --accent: #1f6feb; --accent-ink: #ffffff;
+    --ok: #1a7f4b; --warn: #9a6700; --bad: #b42318; --code: #f2f2ee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17171a; --card: #202024; --ink: #ececea; --muted: #9d9d97;
+      --line: #33333a; --accent: #4c8dff; --accent-ink: #0b1220;
+      --ok: #4ec98a; --warn: #e0b341; --bad: #ff7b72; --code: #17171a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    padding: 32px 20px 64px;
+  }
+  main { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 20px; margin-bottom: 16px;
+  }
+  .step { display: flex; gap: 12px; align-items: baseline; margin-bottom: 12px; }
+  .num {
+    flex: none; width: 24px; height: 24px; border-radius: 50%;
+    background: var(--ink); color: var(--card); font-size: 13px; font-weight: 600;
+    display: grid; place-items: center; align-self: center;
+  }
+  .step h2 { font-size: 16px; margin: 0; font-weight: 600; }
+  button {
+    font: inherit; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--card); color: var(--ink); padding: 9px 14px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.primary {
+    background: var(--accent); color: var(--accent-ink); border-color: transparent;
+    font-weight: 600; padding: 12px 22px; font-size: 16px;
+  }
+  input[type=text] {
+    font: inherit; width: 100%; padding: 9px 11px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  }
+  .row { display: flex; gap: 10px; align-items: center; }
+  .path {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+    background: var(--code); border-radius: 6px; padding: 8px 10px;
+    overflow-wrap: anywhere; margin-top: 10px;
+  }
+  .muted { color: var(--muted); font-size: 13.5px; }
+  label.check { display: flex; gap: 9px; align-items: flex-start; padding: 7px 0; cursor: pointer; }
+  label.check input { margin-top: 3px; }
+  label.check span b { font-weight: 600; }
+  label.check span i { display: block; color: var(--muted); font-size: 13px; font-style: normal; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  .bar { height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; margin: 14px 0 10px; }
+  .bar div { height: 100%; width: 0; background: var(--accent); transition: width 0.2s; }
+  .log {
+    max-height: 260px; overflow: auto; background: var(--code); border-radius: 8px;
+    padding: 10px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px; line-height: 1.7;
+  }
+  .log div { display: flex; gap: 8px; }
+  .tag { flex: none; width: 46px; font-weight: 600; }
+  .ok .tag { color: var(--ok); } .fail .tag { color: var(--bad); }
+  .skip .tag { color: var(--muted); } .info { color: var(--muted); }
+  .counts { display: flex; gap: 22px; flex-wrap: wrap; margin: 4px 0 14px; }
+  .counts b { display: block; font-size: 24px; line-height: 1.2; }
+  .banner {
+    border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; font-size: 14px;
+    border: 1px solid var(--line);
+  }
+  .banner.warn { border-color: var(--warn); }
+  .banner.bad { border-color: var(--bad); }
+  .banner code {
+    display: block; margin-top: 6px; background: var(--code); padding: 7px 9px;
+    border-radius: 6px; font-size: 12.5px; overflow-wrap: anywhere;
+  }
+  .hide { display: none; }
+  pre.report {
+    white-space: pre-wrap; background: var(--code); padding: 12px; border-radius: 8px;
+    font-size: 12.5px; max-height: 340px; overflow: auto;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Document to Markdown</h1>
+  <p class="sub">Turn a folder of documents into Markdown files. Word, PDF, slides,
+  spreadsheets, web pages, ebooks and more.</p>
+
+  <section class="card hide" id="setup-card">
+    <div class="step"><h2 id="setup-title">One-time setup</h2></div>
+    <p id="setup-text" class="muted"></p>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" id="setup-go">Set up now</button>
+      <span class="muted" id="setup-hint"></span>
+    </div>
+    <div class="log hide" id="setup-log" style="margin-top:14px"></div>
+  </section>
+
+  <div id="engines"></div>
+
+  <section class="card">
+    <div class="step"><span class="num">1</span><h2>What do you want to convert?</h2></div>
+    <div class="row">
+      <button id="pick-source">Choose folder…</button>
+      <span class="muted" id="source-hint">Everything inside it, including subfolders.</span>
+    </div>
+    <div class="path hide" id="source-path"></div>
+    <div class="muted hide" id="source-preview" style="margin-top:8px"></div>
+    <details style="margin-top:12px">
+      <summary>Or type a path</summary>
+      <div class="row" style="margin-top:10px">
+        <input type="text" id="source-input" placeholder="/Users/you/Documents/exports" spellcheck="false">
+        <button id="source-use">Use</button>
+      </div>
+    </details>
+  </section>
+
+  <section class="card">
+    <div class="step"><span class="num">2</span><h2>Where should the Markdown go?</h2></div>
+    <div class="row">
+      <input type="text" id="output-input" placeholder="Choose a source folder first" spellcheck="false">
+      <button id="pick-output">Change…</button>
+    </div>
+    <p class="muted" style="margin:10px 0 0">A new folder next to the original. Your
+    files are never changed or moved.</p>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>Options (the defaults are fine)</summary>
+      <div style="margin-top:10px">
+        <label class="check"><input type="checkbox" id="opt-emdash">
+          <span><b>Replace em dashes with commas</b><i>For house styles that ban them.</i></span></label>
+        <label class="check"><input type="checkbox" id="opt-media" checked>
+          <span><b>Save embedded images</b><i>Pictures inside documents are saved next to each Markdown file.</i></span></label>
+        <label class="check"><input type="checkbox" id="opt-flat">
+          <span><b>Put everything in one folder</b><i>Off by default, which keeps your original folder structure.</i></span></label>
+        <label class="check"><input type="checkbox" id="opt-force">
+          <span><b>Redo files converted before</b><i>Normally a file already converted is left alone, so re-runs are quick.</i></span></label>
+        <label class="check"><input type="checkbox" id="opt-ocr">
+          <span><b>Read scanned PDFs with OCR</b><i>Slow, and only works if OCR software is installed.</i></span></label>
+        <label class="check" style="display:block">
+          <span><b>Only these file types</b><i>Leave empty for everything. Example: pdf, docx</i></span>
+          <input type="text" id="opt-only" placeholder="pdf, docx" style="margin-top:6px" spellcheck="false"></label>
+      </div>
+    </details>
+  </section>
+
+  <div class="row" style="margin: 22px 0 8px">
+    <button class="primary" id="go" disabled>Convert</button>
+    <button id="cancel" class="hide">Stop</button>
+    <span class="muted" id="go-hint"></span>
+  </div>
+
+  <section class="card hide" id="progress-card">
+    <div class="step"><h2 id="progress-title">Converting…</h2></div>
+    <div class="bar"><div id="bar-fill"></div></div>
+    <div class="log" id="log"></div>
+  </section>
+
+  <section class="card hide" id="result-card">
+    <div class="step"><h2 id="result-title">Done</h2></div>
+    <div class="counts">
+      <div><b id="c-ok">0</b><span class="muted">converted</span></div>
+      <div><b id="c-skip">0</b><span class="muted">skipped or unchanged</span></div>
+      <div><b id="c-fail">0</b><span class="muted">failed</span></div>
+    </div>
+    <div class="row">
+      <button class="primary" id="open-out">Open the folder</button>
+      <button id="show-report">See the full report</button>
+    </div>
+    <pre class="report hide" id="report"></pre>
+  </section>
+
+  <footer style="margin-top:28px; display:flex; gap:12px; align-items:center">
+    <button id="quit">Quit the app</button>
+    <span class="muted" id="quit-hint">Closing this tab leaves it running in the
+      background. Quitting stops it completely.</span>
+  </footer>
+</main>
+
+<script>
+const TOKEN = "__TOKEN__";
+const api = (path, body) => fetch(path + (path.includes("?") ? "&" : "?") + "token=" + TOKEN,
+  body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"},
+                            body: JSON.stringify(body)}).then(r => r.json());
+const $ = id => document.getElementById(id);
+let source = "", cursor = 0, poller = null;
+
+function setSource(data) {
+  if (!data || !data.path) return;
+  source = data.path;
+  $("source-path").textContent = source;
+  $("source-path").classList.remove("hide");
+  if (typeof data.files === "number") {
+    const kinds = (data.kinds || []).map(k => `${k.count} ${k.ext}`).join(", ");
+    $("source-preview").textContent =
+      `${data.files} file${data.files === 1 ? "" : "s"} inside` + (kinds ? `: ${kinds}` : "");
+    $("source-preview").classList.remove("hide");
+  }
+  if (data.suggestedOutput && !$("output-input").value) {
+    $("output-input").value = data.suggestedOutput;
+  }
+  updateGoState();
+}
+
+$("pick-source").onclick = async () => {
+  const data = await api("/api/pick", {prompt: "Choose the folder to convert"});
+  if (!data.path) {
+    $("source-hint").textContent = "No folder chosen. You can type a path instead.";
+    return;
+  }
+  setSource(data);
+};
+$("source-use").onclick = async () => {
+  const data = await api("/api/inspect", {path: $("source-input").value.trim()});
+  if (!data.exists) { $("source-hint").textContent = "That path does not exist."; return; }
+  setSource(data);
+};
+$("pick-output").onclick = async () => {
+  const data = await api("/api/pick", {prompt: "Choose where the Markdown goes"});
+  if (data.path) $("output-input").value = data.path;
+};
+
+$("go").onclick = async () => {
+  const options = {
+    source,
+    output: $("output-input").value.trim(),
+    noEmDash: $("opt-emdash").checked,
+    media: $("opt-media").checked,
+    flat: $("opt-flat").checked,
+    force: $("opt-force").checked,
+    ocr: $("opt-ocr").checked,
+    only: $("opt-only").value,
+  };
+  const started = await api("/api/convert", options);
+  if (!started.ok) { $("go-hint").textContent = started.error; return; }
+  $("go-hint").textContent = "";
+  $("go").disabled = true;
+  $("cancel").classList.remove("hide");
+  $("result-card").classList.add("hide");
+  $("report").classList.add("hide");
+  $("progress-card").classList.remove("hide");
+  $("progress-title").textContent = "Converting…";
+  $("log").innerHTML = "";
+  $("bar-fill").style.width = "0";
+  cursor = 0;
+  poller = setInterval(poll, 350);
+};
+
+$("cancel").onclick = () => api("/api/cancel", {});
+
+async function poll() {
+  const state = await api("/api/status?cursor=" + cursor);
+  cursor = state.cursor;
+  for (const line of state.lines) {
+    const row = document.createElement("div");
+    row.className = line.state;
+    const tag = {ok: "done", fail: "failed", skip: "same", info: ""}[line.state];
+    const parts = line.text.match(/^(.*?)(?:\s+\((.*)\))?$/s);
+    const reason = parts && parts[2] ? plainEnglish(parts[2]) : "";
+    row.title = line.text;
+    row.innerHTML = `<span class="tag">${tag}</span><span>${escapeHtml(parts ? parts[1] : line.text)}` +
+      (reason ? `<i style="font-style:normal;opacity:.75"> : ${escapeHtml(reason)}</i>` : "") + `</span>`;
+    $("log").appendChild(row);
+  }
+  $("log").scrollTop = $("log").scrollHeight;
+  if (state.total) {
+    $("bar-fill").style.width = (100 * state.done / state.total) + "%";
+    $("progress-title").textContent = `Converting… ${state.done} of ${state.total}`;
+  }
+  if (state.finished) {
+    clearInterval(poller);
+    $("cancel").classList.add("hide");
+    $("go").disabled = false;
+    $("progress-title").textContent = "Finished";
+    $("bar-fill").style.width = "100%";
+    showResult(state);
+  }
+}
+
+function showResult(state) {
+  const rows = [...document.querySelectorAll("#log div")];
+  const count = cls => rows.filter(r => r.classList.contains(cls)).length;
+  $("c-ok").textContent = count("ok");
+  $("c-skip").textContent = count("skip");
+  $("c-fail").textContent = count("fail");
+  $("result-title").textContent = count("fail")
+    ? "Done, with some files it could not read"
+    : "All done";
+  if (state.error) {
+    $("result-title").textContent = state.error;
+  }
+  $("result-card").classList.remove("hide");
+  $("open-out").onclick = () => api("/api/reveal", {path: state.outputDir});
+  $("show-report").onclick = async () => {
+    const data = await api("/api/report");
+    $("report").textContent = data.report || "No report was written.";
+    $("report").classList.toggle("hide");
+  };
+}
+
+// Engine errors are written for engineers. Say what a person can act on.
+const EXPLANATIONS = [
+  [/unpack|central directory|zip|corrupt/i,
+   "the file looks damaged, or its name does not match what is really inside it"],
+  [/no extractable text|scanned/i,
+   "this PDF is a picture of a page with no text in it. Turn on OCR in Options and try again"],
+  [/LibreOffice not installed|produced no/i,
+   "needs LibreOffice, which is not installed yet. See the note at the top of this page"],
+  [/asciidoctor not installed/i, "needs asciidoctor, which is not installed yet"],
+  [/no PDF engine/i, "no PDF reader is installed yet. See the note at the top of this page"],
+  [/timed out/i, "it took too long and was stopped"],
+  [/empty document/i, "there was no text in it to convert"],
+  [/unsupported or binary/i, "not a document. Images, video, archives and programs are left alone"],
+  [/larger than/i, "bigger than the size limit"],
+];
+
+function plainEnglish(reason) {
+  for (const [pattern, message] of EXPLANATIONS) {
+    if (pattern.test(reason)) return message;
+  }
+  return reason;
+}
+
+$("quit").onclick = async () => {
+  await api("/api/quit", {});
+  document.body.innerHTML =
+    '<main><h1>Document to Markdown</h1>' +
+    '<p class="sub">Stopped. You can close this tab. ' +
+    'Open the app again from your Desktop whenever you need it.</p></main>';
+};
+
+function escapeHtml(text) {
+  return text.replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+}
+
+let setupCursor = 0, setupPoller = null, pandocReady = false;
+
+async function refreshEngines() {
+  const data = await api("/api/engines");
+  const missing = data.engines.filter(e => !e.ok);
+  const fetchable = missing.filter(e => e.install);
+  const manual = missing.filter(e => !e.install);
+  pandocReady = data.engines.every(e => e.key !== "pandoc" || e.ok);
+
+  const box = $("engines");
+  box.innerHTML = "";
+  for (const engine of manual) {
+    const div = document.createElement("div");
+    div.className = "banner warn";
+    div.innerHTML = `<b>${escapeHtml(engine.name)} is not installed.</b> ` +
+      `Everything else still works: without it, ${escapeHtml(engine.purpose)} ` +
+      `cannot be converted. ` +
+      `<a href="${engine.link}" target="_blank" rel="noreferrer">Download it here</a> ` +
+      `if you need those files.`;
+    box.appendChild(div);
+  }
+
+  if (fetchable.length) {
+    const needsPandoc = fetchable.some(e => e.key === "pandoc");
+    $("setup-title").textContent = needsPandoc
+      ? "One-time setup" : "Add support for more file types";
+    $("setup-text").textContent = needsPandoc
+      ? "This app needs Pandoc to read documents. Click below and it downloads " +
+        "about 30 MB into its own folder. No password, no Terminal, nothing " +
+        "installed on the rest of your Mac."
+      : "Click below to add: " + fetchable.map(e => e.purpose).join(", ") + ".";
+    $("setup-card").classList.remove("hide");
+  } else {
+    $("setup-card").classList.add("hide");
+  }
+  updateGoState();
+}
+
+function updateGoState() {
+  const ready = pandocReady && source;
+  $("go").disabled = !ready;
+  $("go-hint").textContent = pandocReady ? "" : "Finish the setup above first.";
+}
+
+$("setup-go").onclick = async () => {
+  const started = await api("/api/install", {});
+  if (!started.ok) { $("setup-hint").textContent = started.error; return; }
+  $("setup-go").disabled = true;
+  $("setup-hint").textContent = "This can take a minute.";
+  $("setup-log").classList.remove("hide");
+  $("setup-log").innerHTML = "";
+  setupCursor = 0;
+  setupPoller = setInterval(pollSetup, 400);
+};
+
+async function pollSetup() {
+  const state = await api("/api/install-status?cursor=" + setupCursor);
+  setupCursor = state.cursor;
+  for (const line of state.lines) {
+    const row = document.createElement("div");
+    row.className = line.state;
+    row.innerHTML = `<span class="tag"></span><span>${escapeHtml(line.text)}</span>`;
+    $("setup-log").appendChild(row);
+  }
+  $("setup-log").scrollTop = $("setup-log").scrollHeight;
+  if (state.finished) {
+    clearInterval(setupPoller);
+    $("setup-go").disabled = false;
+    $("setup-hint").textContent = "";
+    await refreshEngines();
+    if (pandocReady) {
+      $("setup-go").textContent = "Set up again";
+      $("setup-hint").textContent = "Ready. Choose a folder above and convert.";
+    }
+  }
+}
+
+refreshEngines();
+</script>
+</body>
+</html>
