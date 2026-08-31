@@ -46,17 +46,18 @@ from shipping a broken installer to everyone who runs the one-line install.
 
 ## The release
 
-There is no build to publish. The install line points at `main`, so **whatever
-is on `main` is what people install**, immediately, on their own machines.
-That is the whole reason CI has to stay green and `main` has to stay protected.
+**Tagging is publishing.** The installer asks GitHub for the newest release
+tag and installs that, and the app's "Check for updates" button offers the same
+tag to people who already have it. Nothing reaches anyone from `main` — so a
+merge is safe, and a tag is the moment you ship.
 
-A release here is a marker rather than a delivery: nothing is built, uploaded
-or downloaded differently because of it. What it buys you is a point to refer
-back to and a written account of what changed.
+That is a deliberate trade for the older arrangement, where the install line
+served `main` and every merge was a release. Keep `main` green and protected
+anyway: it is what the next tag will be cut from.
 
-When something user-visible changes, bump `VERSION` in `macos/build_app.sh`,
-give the `CHANGELOG.md` section that version and the date it landed, and once
-it is merged and CI is green on `main`, tag that commit:
+When something user-visible changes, bump the `VERSION` file at the root, give
+the `CHANGELOG.md` section that version and the date it landed, and once it is
+merged and CI is green on `main`, tag that commit:
 
 ```bash
 git checkout main && git pull
@@ -66,6 +67,15 @@ git tag -a v1.0.4 -m "What changed" && git push origin v1.0.4
 Then draft a release from the tag on GitHub, with that changelog section as the
 notes. Open the app on a real Mac before tagging: a tag says "this one is
 good", and CI can build the bundle but cannot double-click it.
+
+`BUNDLE_FORMAT` at the root is a separate number, and it matters. An in-app
+update replaces the app's Python and HTML, which live in the support folder,
+but it cannot replace the launcher script, `Info.plist` or the icon inside the
+bundle. **If you change any of those three, bump `BUNDLE_FORMAT`.** An update
+carrying a higher number than the installed bundle refuses to install itself
+and tells the person to run the install line instead, which is the only thing
+that can replace a bundle. Forgetting to bump it is how someone ends up with
+new code under an old launcher.
 
 `scripts/doc2gfm.py` carries its own `VERSION`. That is the converter's, not
 the app's — it is written into the front matter of every file it produces, so

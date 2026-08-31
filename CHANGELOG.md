@@ -3,6 +3,42 @@
 Newest first. Dates are when the change landed on `main`, which is also when
 it reached anyone who runs the install line.
 
+## 1.0.4 — 2026-08-31
+
+### Added
+
+- **The app can update itself.** When a newer release exists it says what
+  changed and offers to install it. Before installing, the downloaded copy is
+  started once on its own; if it does not come up, it is discarded and the
+  working version is left alone.
+- **Whether it looks for updates on its own is asked once, and is the person's
+  to answer.** Both options are put in front of them with the trade written out
+  and neither preselected: check once a day and get fixes without thinking
+  about it, or check only on the button and send nothing unasked. The answer
+  can be changed at any time from the page, and nothing is asked of the network
+  until it has been given.
+- An update installs into the app's own support folder rather than rewriting
+  the bundle in `/Applications`, so it needs no permissions, cannot half-replace
+  a running app, and can be undone by deleting one folder.
+- The app knows its own version, from a `VERSION` file at the root of the
+  repository that the build stamps into the bundle.
+- `BUNDLE_FORMAT` marks the parts of the app an update cannot replace. A release
+  needing a newer one refuses to install and asks for the install line instead.
+- `--selftest` starts the server, answers one request, and exits. It is what an
+  update is put through before it is trusted.
+
+### Changed
+
+- **The installer installs the newest release, not the tip of `main`.** Merging
+  is no longer publishing; tagging is. `MDA_REF=main ./install.sh` still
+  installs a branch for testing.
+- The app now makes one more kind of network request: asking GitHub for the
+  newest release tag. It sends an IP address and nothing else — no file, no file
+  name, nothing out of a document — and happens either once a day or only on the
+  button, as the person chose.
+- The page now says plainly what stays on the machine and what does not, rather
+  than leaving it to the README.
+
 ## 1.0.3 — 2026-08-31
 
 ### Safer
