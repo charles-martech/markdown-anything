@@ -1,3 +1,18 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+.venv/
+venv/
+.ruff_cache/
+
+# Output the converter or the tests may leave behind
+*-markdown/
+_conversion-report.md
+_conversion-manifest.json
+
+# Editors and operating systems
 .DS_Store
+.idea/
+.vscode/
+*.swp

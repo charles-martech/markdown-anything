@@ -1,0 +1,20 @@
+# The app is standard library only and reads like prose, so the lint rules are
+# the ones that catch real mistakes rather than the ones that enforce a taste.
+line-length = 88
+target-version = "py39"
+
+[lint]
+select = ["E", "F", "W", "B", "C4", "S", "BLE", "RUF"]
+ignore = [
+    "S404",  # subprocess is how this program converts anything
+    "S603",  # every call is a list of arguments, never a shell string
+    "S607",  # tools are found on PATH on purpose: see tool_path()
+    "E501",  # long lines are flagged by review, not by a counter
+    "RUF005", # concatenating short tuples reads better than unpacking them
+    # A `# noqa` here says why a line is safe, and stays worth reading after a
+    # ruff release stops needing it. A stale one is not a reason to fail a build.
+    "RUF100",
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["S101"]  # assert is what a test is made of

@@ -2,7 +2,7 @@
 # Build one fixture per format family, convert the folder, and report.
 # Everything happens in a temp directory; nothing is written to the repo.
 set -uo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 2
 SCRIPT="$PWD/doc2gfm.py"
 
 command -v pandoc >/dev/null || { echo "pandoc is required; run ./setup.sh"; exit 2; }

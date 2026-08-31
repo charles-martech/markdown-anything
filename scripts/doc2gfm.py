@@ -8,7 +8,7 @@ touches files whose source changed. Nothing is ever written over the input.
 Usage:
     python3 doc2gfm.py INPUT [INPUT ...] -o OUTDIR [options]
 
-Run with --help for the full option list, or read references/formats.md for the
+Run with --help for the full option list, or read docs/formats.md for the
 routing table (which extension goes through which engine).
 """
 
@@ -143,7 +143,7 @@ EXTRA_TOOL_DIRS = [
 ]
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\r(?!\n)")
-EM_DASH_RE = re.compile(r"\s*(?:—|–)\s*")
+EM_DASH_RE = re.compile(r"\s*(?:—|–)\s*")  # noqa: RUF001 - em and en dash
 
 
 # --------------------------------------------------------------------------
@@ -354,6 +354,21 @@ _A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 _P = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
 
 
+ENTITY_RE = re.compile(rb"<!ENTITY", re.IGNORECASE)
+
+
+def parse_xml(data: bytes) -> ET.Element:
+    """Parse XML found inside a document, refusing one that declares entities.
+
+    ElementTree expands entities a document defines about itself, so a few
+    lines of XML can unpack into gigabytes of memory while being read. No real
+    slide deck declares any, so a file that does is refused rather than read.
+    """
+    if ENTITY_RE.search(data[:65536]):
+        raise ConversionError("the file declares XML entities and was not read")
+    return ET.fromstring(data)  # noqa: S314 - entity declarations refused above
+
+
 def _para_text(para: ET.Element) -> str:
     return "".join(t.text or "" for t in para.iter(f"{_A}t")).strip()
 
@@ -401,7 +416,7 @@ def _gfm_table(rows: list[list[str]]) -> list[str]:
 
 def _slide_body(xml_bytes: bytes) -> tuple[str, list[str]]:
     """Return (title, body lines) for one slide, in shape order."""
-    root = ET.fromstring(xml_bytes)
+    root = parse_xml(xml_bytes)
     tree = root.find(f".//{_P}cSld/{_P}spTree")
     title = ""
     lines: list[str] = []
@@ -436,7 +451,7 @@ def _slide_body(xml_bytes: bytes) -> tuple[str, list[str]]:
 
 
 def _notes_text(xml_bytes: bytes, slide_number: int) -> list[str]:
-    root = ET.fromstring(xml_bytes)
+    root = parse_xml(xml_bytes)
     out = []
     for para in root.iter(f"{_A}p"):
         text = _para_text(para)
@@ -671,8 +686,8 @@ def convert_biblio(args: argparse.Namespace, src: Path, fmt: str,
         except (KeyError, IndexError, TypeError):
             year = ""
         container = entry.get("container-title") or entry.get("publisher") or ""
-        link = entry.get("DOI") and f"https://doi.org/{entry['DOI']}" \
-            or entry.get("URL") or ""
+        doi = entry.get("DOI")
+        link = f"https://doi.org/{doi}" if doi else (entry.get("URL") or "")
         bits = [f"**{title}**"]
         if authors:
             bits.append(authors)
@@ -734,7 +749,10 @@ def front_matter(job: Job, args: argparse.Namespace) -> str:
     }
     lines = ["---"]
     for key, value in fields.items():
-        lines.append(f'{key}: "{value}"')
+        # A source path can hold quotes and backslashes; escaped, they stay
+        # inside the string instead of ending it and breaking every reader.
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        lines.append(f'{key}: "{escaped}"')
     lines.append("---")
     return "\n".join(lines) + "\n\n"
 
