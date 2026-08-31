@@ -42,6 +42,8 @@ shellcheck install.sh macos/build_app.sh scripts/*.sh
 ```
 
 CI runs all of these on Python 3.9, 3.11 and 3.13, and builds the Mac app.
+It pins the ruff version, so `pip install ruff==0.15.8` if a lint result
+here disagrees with the one on your pull request.
 
 ## Adding a format
 

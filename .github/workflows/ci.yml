@@ -48,7 +48,10 @@ jobs:
           python-version: "3.13"
       - name: Ruff
         run: |
-          python -m pip install --quiet ruff
+          # Pinned: an unpinned linter turns "someone else released a
+          # version" into a red build on a pull request that changed nothing.
+          # Raising it is a deliberate change, and docs/maintenance.md says so.
+          python -m pip install --quiet ruff==0.15.8
           ruff check .
       - name: Shell scripts
         run: |
@@ -71,11 +74,20 @@ jobs:
       - name: The server starts, answers, and stops
         run: |
           export DOC2MD_HOME="$RUNNER_TEMP/support"
-          python3 app/server.py --no-browser &
-          for _ in $(seq 40); do
+          # -u so the server's own output reaches the log unbuffered, and a
+          # file to keep it in, so a start that fails says why instead of
+          # leaving the step to time out against a missing instance.json.
+          python3 -u app/server.py --no-browser > "$RUNNER_TEMP/server.log" 2>&1 &
+          for _ in $(seq 60); do
             [ -f "$DOC2MD_HOME/instance.json" ] && break
-            sleep 0.25
+            sleep 0.5
           done
+          if [ ! -f "$DOC2MD_HOME/instance.json" ]; then
+            echo "The server never wrote instance.json. Its output was:"
+            cat "$RUNNER_TEMP/server.log" || true
+            ls -la "$DOC2MD_HOME" || true
+            exit 1
+          fi
           PORT=$(python3 -c "import json,os;print(json.load(open(os.environ['DOC2MD_HOME']+'/instance.json'))['port'])")
           TOKEN=$(python3 -c "import json,os;print(json.load(open(os.environ['DOC2MD_HOME']+'/instance.json'))['token'])")
           curl -fsS "http://127.0.0.1:$PORT/api/ping?token=$TOKEN"

@@ -1,0 +1,29 @@
+name: "Document to Markdown"
+
+queries:
+  - uses: security-and-quality
+
+# Two queries are turned off here, deliberately and with the reasoning written
+# down, because they fire on what this program is for rather than on a mistake
+# in it. Everything else in the suite stays on, including the archive, XML and
+# request-handling queries that actually matter to this app.
+#
+# The app is a converter with a local interface. Its user picks a folder, and
+# the app then reads that folder and runs Pandoc over what is inside. The path
+# arrives in an HTTP request, which CodeQL reads as untrusted input reaching
+# the filesystem and a command line — correct in general, and not here: the
+# server is bound to 127.0.0.1, holds a token, refuses any request naming
+# another host, and the person driving the page is already the account the
+# program runs as. Restricting which folders they may convert would remove the
+# feature and protect nobody from anybody.
+#
+# If this app ever grows a surface reachable by someone other than its own
+# user — a shared instance, a remote mode, a multi-account machine — delete
+# these two filters before writing a line of that code. They stop being
+# reasonable the moment the person sending the path is not the person running
+# the program.
+query-filters:
+  - exclude:
+      id: py/path-injection
+  - exclude:
+      id: py/command-line-injection

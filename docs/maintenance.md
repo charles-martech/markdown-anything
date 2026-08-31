@@ -23,6 +23,9 @@ turn on for you. This is the list, and why each one is here.
       repositories, and it stops a key going out in a commit.
 - [ ] **CodeQL**: the workflow in `.github/workflows/codeql.yml` runs it, so
       "Advanced" setup, not "Default", or the two will run twice.
+      `.github/codeql/codeql-config.yml` turns off two queries and says why in
+      full. Read that comment before adding anything network-facing to the
+      app: the reasoning it rests on stops holding at that point.
 
 **Settings → Actions → General**
 
@@ -62,6 +65,9 @@ git tag -a v1.0.3 -m "What changed" && git push origin v1.0.3
 - **Watch the reader libraries.** `READER_PACKAGES` in the same file has upper
   bounds so a new major version cannot arrive on someone's machine unannounced.
   Raising a bound means testing a PDF and a spreadsheet afterwards.
+- **Raise the ruff pin** in `.github/workflows/ci.yml` now and then, and run
+  `ruff check .` locally with the new version before pushing it. It is pinned
+  so that a lint release cannot redden a pull request that changed nothing.
 - **Read the Dependabot pull requests** for the actions. They are other
   people's code running with your repository's token.
 - **Run `scripts/selftest.sh` on a real Mac** now and then. CI proves the app
