@@ -3,7 +3,7 @@
 Newest first. Dates are when the change landed on `main`, which is also when
 it reached anyone who runs the install line.
 
-## Unreleased
+## 1.0.3 — 2026-08-31
 
 ### Safer
 
