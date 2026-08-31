@@ -28,6 +28,10 @@ it reached anyone who runs the install line.
   which is a few lines of XML that would otherwise eat all your memory.
 - Requests with an oversized or malformed body, and nonsense query values, are
   answered rather than turned into a crash.
+- Downloaded archives are unpacked a member at a time, each to a path checked
+  to be inside the folder, and links in an archive are skipped rather than
+  written. Checking every member and then calling `extractall` is not the same
+  thing: a symlink written early can move where a later member lands.
 
 ### Fixed
 

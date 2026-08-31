@@ -104,11 +104,14 @@ class ServerDoorTest(unittest.TestCase):
         self.assertEqual(status, 200)
 
     def test_oversized_body_is_refused(self) -> None:
+        # Only the declared length is sent, not a real megabyte: the server
+        # refuses on the header alone, and a client still writing the body
+        # into the socket it just closed would fail for the wrong reason.
         status, _ = self.request(
             f"/api/convert?token={server.TOKEN}", method="POST",
             headers={"Content-Length": str(server.MAX_BODY + 1),
                      "Content-Type": "application/json"},
-            body=b"{}" + b" " * server.MAX_BODY)
+            body=b"{}")
         self.assertEqual(status, 413)
 
     def test_unknown_path_is_not_found(self) -> None:
@@ -145,6 +148,24 @@ class DownloadTest(unittest.TestCase):
             with self.assertRaises(server.UnsafeArchive):
                 server.extract_archive(archive, "bad.tar.gz", Path(tmp) / "out")
             self.assertFalse((Path(tmp) / "escaped.txt").exists())
+
+    def test_links_in_an_archive_are_not_written(self) -> None:
+        # Pandoc's own tarball ships pandoc-lua and pandoc-server as symlinks.
+        # They are skipped rather than refused, so the real pandoc beside them
+        # still arrives, and no link is ever created to redirect a later write.
+        with tempfile.TemporaryDirectory() as tmp:
+            real = Path(tmp) / "pandoc"
+            real.write_text("binary")
+            link = Path(tmp) / "pandoc-lua"
+            link.symlink_to("pandoc")
+            archive = Path(tmp) / "linked.tar.gz"
+            with tarfile.open(archive, "w:gz") as tf:
+                tf.add(real, arcname="pandoc-3/bin/pandoc")
+                tf.add(link, arcname="pandoc-3/bin/pandoc-lua")
+            out = Path(tmp) / "out"
+            server.extract_archive(archive, "linked.tar.gz", out)
+            self.assertTrue((out / "pandoc-3" / "bin" / "pandoc").is_file())
+            self.assertFalse((out / "pandoc-3" / "bin" / "pandoc-lua").exists())
 
     def test_ordinary_archive_still_unpacks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

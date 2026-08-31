@@ -359,40 +359,63 @@ def trusted_download(url: str) -> bool:
 
 
 def extract_archive(archive: Path, name: str, target: Path) -> None:
-    """Unpack a download, refusing any member that points outside `target`.
+    """Unpack a download, writing only the files that belong inside `target`.
 
-    An archive is untrusted input even when it came from a trusted host: a
-    member named ../../../.zshrc would otherwise be written wherever it asked.
+    An archive is untrusted input even when it came from a trusted host, so
+    nothing here hands it to `extractall`: members are written one at a time,
+    each to a path checked to be inside the folder, and links are not written
+    at all. A link is what makes the check-then-extract pattern unsafe — an
+    early symlink can move where a later member lands — and Pandoc does not
+    need them: `bin/pandoc` is a real file, and `pandoc-lua` and
+    `pandoc-server`, the two symlinks beside it, are not used by this app.
     """
     target.mkdir(parents=True, exist_ok=True)
     root = target.resolve()
 
-    def inside(member: str) -> bool:
-        try:
-            resolved = (root / member).resolve()
-        except OSError:
-            return False
-        return resolved == root or root in resolved.parents
+    def destination(member: str) -> Path:
+        """Where a member may be written, or UnsafeArchive if that is out."""
+        parts = Path(member).parts
+        if not member or member.startswith("/") or ".." in parts:
+            raise UnsafeArchive(member)
+        # normpath, not resolve: this must not follow anything on disk.
+        chosen = Path(os.path.normpath(root / member))
+        if chosen != root and root not in chosen.parents:
+            raise UnsafeArchive(member)
+        return chosen
+
+    def write(source, path: Path, executable: bool) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as out:
+            shutil.copyfileobj(source, out)
+        if executable:
+            path.chmod(0o755)
 
     if name.endswith(".zip"):
         with zipfile.ZipFile(archive) as zf:
-            for member in zf.namelist():
-                if not inside(member):
-                    raise UnsafeArchive(member)
-            zf.extractall(target)  # noqa: S202 - members checked above
+            for entry in zf.infolist():
+                path = destination(entry.filename)
+                mode = (entry.external_attr >> 16) & 0xFFFF
+                if entry.is_dir():
+                    path.mkdir(parents=True, exist_ok=True)
+                elif mode & 0o170000 == 0o120000:  # a symlink
+                    continue
+                else:
+                    with zf.open(entry) as source:
+                        write(source, path, bool(mode & 0o111))
         return
     with tarfile.open(archive) as tf:
         for member in tf.getmembers():
-            if not inside(member.name):
-                raise UnsafeArchive(member.name)
-            if (member.issym() or member.islnk()) and not inside(member.linkname):
-                raise UnsafeArchive(member.linkname)
-        # Every member was checked above, and the filter refuses links and
-        # permissions that reach outside the folder on top of that.
-        try:
-            tf.extractall(target, filter="data")
-        except TypeError:  # a Python without extraction filters
-            tf.extractall(target)  # noqa: S202
+            path = destination(member.name)
+            if member.isdir():
+                path.mkdir(parents=True, exist_ok=True)
+                continue
+            if not member.isfile():   # links, devices, anything else
+                continue
+            source = tf.extractfile(member)
+            if source is None:
+                continue
+            with source:
+                write(source, path, bool(member.mode & 0o111))
 
 
 def pandoc_asset() -> tuple[str, str]:
