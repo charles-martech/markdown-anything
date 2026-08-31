@@ -17,7 +17,6 @@ import tempfile
 import threading
 import unittest
 import zipfile
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,7 +44,7 @@ class ServerDoorTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        cls.server = server.Server(("127.0.0.1", 0), server.Handler)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -117,6 +116,27 @@ class ServerDoorTest(unittest.TestCase):
     def test_unknown_path_is_not_found(self) -> None:
         status, _ = self.request(f"/api/nope?token={server.TOKEN}")
         self.assertEqual(status, 404)
+
+
+class BindTest(unittest.TestCase):
+    def test_binding_does_not_wait_on_dns(self) -> None:
+        """The stock HTTPServer reverse-resolves 127.0.0.1 while binding.
+
+        On a machine whose resolver is slow or unreachable that stalls the
+        whole app before it prints anything, which looks exactly like an icon
+        that does nothing. Nothing here may go near a name server.
+        """
+        import socket
+        asked = []
+        original = socket.getfqdn
+        socket.getfqdn = lambda *args: asked.append(args) or "should-not-happen"
+        try:
+            bound = server.Server(("127.0.0.1", 0), server.Handler)
+            bound.server_close()
+        finally:
+            socket.getfqdn = original
+        self.assertEqual(asked, [])
+        self.assertEqual(bound.server_name, "127.0.0.1")
 
 
 class DownloadTest(unittest.TestCase):

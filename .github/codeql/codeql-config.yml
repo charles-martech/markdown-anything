@@ -3,10 +3,11 @@ name: "Document to Markdown"
 queries:
   - uses: security-and-quality
 
-# Two queries are turned off here, deliberately and with the reasoning written
-# down, because they fire on what this program is for rather than on a mistake
+# One query is turned off here, deliberately and with the reasoning written
+# down, because it fires on what this program is for rather than on a mistake
 # in it. Everything else in the suite stays on, including the archive, XML and
-# request-handling queries that actually matter to this app.
+# request-handling queries that actually matter to this app. The archive query
+# found a real weakness and was left on: the fix was to stop using extractall.
 #
 # The app is a converter with a local interface. Its user picks a folder, and
 # the app then reads that folder and runs Pandoc over what is inside. The path
@@ -17,13 +18,16 @@ queries:
 # program runs as. Restricting which folders they may convert would remove the
 # feature and protect nobody from anybody.
 #
+# The three alerts this silences are the folder chooser (app/server.py, the
+# reveal, convert and inspect handlers). Command-line injection is NOT excluded,
+# even though the same paths reach a command line: that query does not fire
+# here, because every call is a list of arguments rather than a shell string,
+# and leaving it on means it will fire if that ever stops being true.
+#
 # If this app ever grows a surface reachable by someone other than its own
 # user — a shared instance, a remote mode, a multi-account machine — delete
-# these two filters before writing a line of that code. They stop being
-# reasonable the moment the person sending the path is not the person running
-# the program.
+# this filter before writing a line of that code. It stops being reasonable
+# the moment the person sending the path is not the person running the program.
 query-filters:
   - exclude:
       id: py/path-injection
-  - exclude:
-      id: py/command-line-injection

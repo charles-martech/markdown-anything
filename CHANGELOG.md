@@ -35,6 +35,11 @@ it reached anyone who runs the install line.
 
 ### Fixed
 
+- **The app could hang on startup, showing nothing.** Python's HTTP server
+  reverse-resolves its own address while binding, so on a Mac whose resolver is
+  slow or unreachable, clicking the icon did nothing at all for half a minute
+  before the page appeared. Nothing about starting up goes near a name server
+  now. This is the likeliest cause of "the icon does nothing" in the README.
 - The installer removed anything on the Desktop whose name started with
   "Document to Markdown". It now removes only its own shortcut, by exact name.
 - A quote or a backslash in a file name no longer breaks the YAML front matter
