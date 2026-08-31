@@ -11,9 +11,12 @@ from __future__ import annotations
 import http.client
 import importlib.util
 import os
+import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import threading
 import unittest
 import zipfile
@@ -92,6 +95,9 @@ class ServerDoorTest(unittest.TestCase):
         self.assertEqual(self.request("/api/status")[0], 403)
         self.assertEqual(self.request("/api/status?token=wrong")[0], 403)
         self.assertEqual(self.request("/api/engines?token=wrong")[0], 403)
+        self.assertEqual(self.request("/api/version?token=wrong")[0], 403)
+        self.assertEqual(
+            self.request("/api/update", method="POST")[0], 403)
 
     def test_api_answers_with_the_token(self) -> None:
         status, body = self.request(f"/api/ping?token={server.TOKEN}")
@@ -137,6 +143,146 @@ class BindTest(unittest.TestCase):
             socket.getfqdn = original
         self.assertEqual(asked, [])
         self.assertEqual(bound.server_name, "127.0.0.1")
+
+
+class UpdateTest(unittest.TestCase):
+    """The update path. Nothing here is allowed to reach the network."""
+
+    def payload(self, directory: Path, version: str) -> Path:
+        """A tree shaped like a release archive of this app."""
+        root = directory / f"markdown-anything-{version}"
+        (root / "app").mkdir(parents=True)
+        (root / "scripts").mkdir(parents=True)
+        (root / "app" / "server.py").write_text("")
+        (root / "app" / "index.html").write_text("")
+        (root / "scripts" / "doc2gfm.py").write_text("")
+        (root / "VERSION").write_text(version + "\n")
+        (root / "BUNDLE_FORMAT").write_text("1\n")
+        return root
+
+    def test_versions_compare_by_number_not_text(self) -> None:
+        self.assertGreater(server.version_tuple("1.0.10"),
+                           server.version_tuple("1.0.9"))
+        self.assertGreater(server.version_tuple("v1.1.0"),
+                           server.version_tuple("1.0.99"))
+        self.assertEqual(server.version_tuple("v1.0.3"),
+                         server.version_tuple("1.0.3"))
+
+    def test_only_a_version_number_is_accepted_as_a_tag(self) -> None:
+        # The tag arrives from the network and is put into a download URL.
+        for good in ("v1.0.3", "1.0.3", "v2", "v1.2.3.4"):
+            self.assertTrue(server.TAG_RE.fullmatch(good), good)
+        for bad in ("v1.0.3; rm -rf ~", "../../etc/passwd", "latest",
+                    "v1.0.3/../../x", "v1.0.3\n", ""):
+            self.assertFalse(server.TAG_RE.fullmatch(bad), bad)
+
+    def test_release_archive_is_recognised_through_its_wrapper(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            unpacked = Path(tmp)
+            root = self.payload(unpacked, "1.0.5")
+            self.assertEqual(server.payload_root(unpacked), root)
+
+    def test_an_archive_missing_the_app_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            unpacked = Path(tmp)
+            root = self.payload(unpacked, "1.0.5")
+            (root / "scripts" / "doc2gfm.py").unlink()
+            with self.assertRaises(server.UnsafeArchive):
+                server.payload_root(unpacked)
+
+    def test_a_release_older_than_the_version_stamp_is_refused(self) -> None:
+        # Releases before the update mechanism existed carry no VERSION file.
+        with tempfile.TemporaryDirectory() as tmp:
+            unpacked = Path(tmp)
+            root = self.payload(unpacked, "1.0.5")
+            (root / "VERSION").unlink()
+            with self.assertRaises(server.UnsafeArchive):
+                server.payload_root(unpacked)
+
+    def test_installing_replaces_what_was_there_and_leaves_no_debris(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            first = self.payload(Path(tmp) / "a", "1.0.5")
+            second = self.payload(Path(tmp) / "b", "1.0.6")
+            server.install_payload(first)
+            self.assertEqual(
+                (server.PAYLOAD_DIR / "VERSION").read_text().strip(), "1.0.5")
+            server.install_payload(second)
+            self.assertEqual(
+                (server.PAYLOAD_DIR / "VERSION").read_text().strip(), "1.0.6")
+            leftovers = {p.name for p in server.SUPPORT.iterdir()}
+            self.assertNotIn("current.new", leftovers)
+            self.assertNotIn("current.old", leftovers)
+            shutil.rmtree(server.PAYLOAD_DIR)
+
+    def test_the_app_knows_its_own_version(self) -> None:
+        # Read from the VERSION file the build stamps beside the app's files.
+        self.assertNotEqual(server.VERSION, "0.0.0")
+        self.assertTrue(server.TAG_RE.fullmatch(server.VERSION), server.VERSION)
+
+
+class UpdatePreferenceTest(unittest.TestCase):
+    """Whether the app looks for updates on its own is the person's answer."""
+
+    def setUp(self) -> None:
+        server.SETTINGS_FILE.unlink(missing_ok=True)
+
+    tearDown = setUp
+
+    def test_unanswered_until_the_person_answers(self) -> None:
+        # None, not False: the page needs to know it has never been asked, so
+        # that it asks instead of quietly deciding.
+        self.assertIsNone(server.settings_for_page()["autoCheck"])
+        self.assertFalse(server.settings_for_page()["checkNow"])
+
+    def test_the_answer_is_remembered_both_ways(self) -> None:
+        for answer in (True, False, True):
+            server.set_auto_check(answer)
+            self.assertEqual(server.settings_for_page()["autoCheck"], answer)
+
+    def test_saying_no_means_nothing_is_ever_due(self) -> None:
+        server.set_auto_check(False)
+        self.assertFalse(server.settings_for_page()["checkNow"])
+
+    def test_a_check_is_due_once_a_day_and_not_more(self) -> None:
+        server.set_auto_check(True)
+        self.assertTrue(server.settings_for_page()["checkNow"])
+        server.note_check()
+        self.assertFalse(server.settings_for_page()["checkNow"])
+        saved = server.read_settings()
+        saved["lastCheck"] = time.time() - server.CHECK_INTERVAL - 1
+        server.write_settings(saved)
+        self.assertTrue(server.settings_for_page()["checkNow"])
+
+    def test_the_answer_is_not_readable_by_other_accounts(self) -> None:
+        server.set_auto_check(True)
+        self.assertEqual(server.SETTINGS_FILE.stat().st_mode & 0o777, 0o600)
+
+    def test_a_damaged_settings_file_is_not_an_answer(self) -> None:
+        server.SETTINGS_FILE.write_text("{not json")
+        self.assertIsNone(server.settings_for_page()["autoCheck"])
+
+
+class SelftestTest(unittest.TestCase):
+    def test_a_working_copy_passes(self) -> None:
+        """--selftest is what an update is put through before it is trusted."""
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "app" / "server.py"), "--selftest"],
+                capture_output=True, text=True, timeout=120,
+                env={**os.environ, "DOC2MD_HOME": tmp})
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_copy_without_its_converter_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            broken = Path(tmp) / "broken"
+            (broken / "app").mkdir(parents=True)
+            shutil.copy(ROOT / "app" / "server.py", broken / "app" / "server.py")
+            result = subprocess.run(
+                [sys.executable, str(broken / "app" / "server.py"), "--selftest"],
+                capture_output=True, text=True, timeout=120,
+                env={**os.environ, "DOC2MD_HOME": tmp})
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("converter missing", result.stderr)
 
 
 class DownloadTest(unittest.TestCase):

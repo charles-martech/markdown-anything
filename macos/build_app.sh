@@ -12,7 +12,9 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="Document to Markdown"
 BUNDLE_ID="com.markdown.documenttomarkdown"
-VERSION="1.0.3"
+# One source of truth, read by the app at runtime so it can tell whether a
+# release on GitHub is newer than itself.
+VERSION="$(cat "$REPO/VERSION")"
 
 DEST="${1:-/Applications}"
 if [ ! -w "$DEST" ]; then
@@ -50,6 +52,11 @@ cp "$REPO/macos/icon.icns" "$APP/Contents/Resources/icon.icns"
 mkdir -p "$APP/Contents/Resources/app" "$APP/Contents/Resources/scripts"
 cp "$REPO/app/server.py" "$REPO/app/index.html" "$APP/Contents/Resources/app/"
 cp "$REPO/scripts/doc2gfm.py" "$APP/Contents/Resources/scripts/"
+# VERSION lets the running app compare itself against a release. BUNDLE_FORMAT
+# is bumped only when the launcher, Info.plist or icon change — the parts an
+# in-app update cannot replace — so an update carrying a higher number stops
+# and asks for a reinstall instead of installing something half-usable.
+cp "$REPO/VERSION" "$REPO/BUNDLE_FORMAT" "$APP/Contents/Resources/"
 
 cat > "$APP/Contents/MacOS/launcher" <<'LAUNCHER'
 #!/bin/bash
@@ -70,6 +77,17 @@ done
 
 if [ -z "$PY" ]; then
   fail "Python 3 is needed and was not found.\n\nmacOS installs it with the Developer Tools: open Terminal, type xcode-select --install and accept the dialog, then open this app again."
+fi
+
+# An update installs a complete copy of the app's own files here, in the
+# folder this app already owns, rather than rewriting the bundle in
+# /Applications: no permissions to ask for, nothing to half-overwrite while it
+# is running, and dragging that one folder to the trash puts the shipped
+# version back. The installer clears it, so re-running the install line always
+# wins over whatever was updated into place.
+PAYLOAD="$HOME/Library/Application Support/Document to Markdown/current"
+if [ -f "$PAYLOAD/app/server.py" ] && [ -f "$PAYLOAD/scripts/doc2gfm.py" ]; then
+  RESOURCES="$PAYLOAD"
 fi
 
 cd "$RESOURCES" || fail "The app files could not be found. Reinstall the app."

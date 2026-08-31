@@ -186,10 +186,33 @@
     <pre class="report hide" id="report"></pre>
   </section>
 
-  <footer style="margin-top:28px; display:flex; gap:12px; align-items:center">
-    <button id="quit">Quit the app</button>
-    <span class="muted" id="quit-hint">Closing this tab leaves it running in the
-      background. Quitting stops it completely.</span>
+  <div id="update-box" class="banner hide" style="margin-top:28px"></div>
+  <div id="update-log" class="log hide" style="margin-top:12px"></div>
+
+  <footer style="margin-top:28px; display:flex; flex-direction:column; gap:12px">
+    <div class="row">
+      <button id="quit">Quit the app</button>
+      <span class="muted" id="quit-hint">Closing this tab leaves it running in
+        the background. Quitting stops it completely.</span>
+    </div>
+    <div class="row">
+      <button id="check-update">Check for updates</button>
+      <span class="muted" id="version-line"></span>
+      <label class="muted hide" id="auto-label" style="display:none; gap:6px;
+             align-items:center; cursor:pointer">
+        <input type="checkbox" id="auto-check"> Check automatically
+      </label>
+    </div>
+    <p class="muted" style="margin:0; max-width:64ch">
+      Your documents stay on this computer. They are read here, converted here,
+      and written here — no file, and nothing out of a file, is ever sent
+      anywhere, and there is no account, no server of ours, and nothing
+      reporting back. This app reaches the internet in two situations only:
+      setting itself up, which downloads Pandoc from GitHub and the PDF and
+      spreadsheet readers from PyPI, and looking for a newer version, which
+      asks GitHub what the newest release is. Both carry your computer's
+      address and nothing else.
+    </p>
   </footer>
 </main>
 
@@ -344,6 +367,127 @@ $("quit").onclick = async () => {
     '<p class="sub">Stopped. You can close this tab. ' +
     'Open the app again from your Desktop whenever you need it.</p></main>';
 };
+
+// Updates. The app asks GitHub nothing unless this button is pressed: no
+// check on launch, no daily ping, nothing in the background.
+let updatePoller = null, updateCursor = 0;
+
+api("/api/settings").then(settings => {
+  $("version-line").textContent = "Version " + settings.version;
+  if (settings.autoCheck === null) {
+    askAboutUpdates();          // never been asked; do not decide for them
+  } else {
+    showAutoCheckBox(settings.autoCheck);
+    if (settings.checkNow) checkForUpdates(true);
+  }
+}).catch(() => {});
+
+// Asked once, plainly, with neither answer preselected. Both are reasonable
+// and the difference is about their privacy, not ours to guess at.
+function askAboutUpdates() {
+  const box = $("update-box");
+  box.classList.remove("hide");
+  box.classList.add("warn");
+  box.innerHTML =
+    "<b>Should this app look for updates on its own?</b><br><br>" +
+    "Updates carry fixes, including security ones, and improvements to how " +
+    "documents are converted. Checking means asking GitHub once a day whether " +
+    "a newer version exists — it tells GitHub your computer's address and " +
+    "nothing else. Your documents are never involved, either way.<br><br>" +
+    '<button id="auto-yes">Check automatically</button> ' +
+    '<button id="auto-no">Only when I ask</button>';
+  $("auto-yes").onclick = () => chooseAutoCheck(true);
+  $("auto-no").onclick = () => chooseAutoCheck(false);
+}
+
+async function chooseAutoCheck(enabled) {
+  await api("/api/settings", {autoCheck: enabled});
+  showAutoCheckBox(enabled);
+  const box = $("update-box");
+  box.classList.remove("warn");
+  box.textContent = enabled
+    ? "This app will check for updates once a day. You can turn that off below."
+    : "This app will not contact anything unless you press Check for updates.";
+  if (enabled) checkForUpdates(true);
+}
+
+function showAutoCheckBox(enabled) {
+  const label = $("auto-label");
+  label.classList.remove("hide");
+  label.style.display = "flex";
+  $("auto-check").checked = enabled;
+  $("auto-check").onchange = () =>
+    api("/api/settings", {autoCheck: $("auto-check").checked});
+}
+
+$("check-update").onclick = () => checkForUpdates(false);
+
+async function checkForUpdates(quiet) {
+  const box = $("update-box");
+  if (!quiet) {
+    box.classList.remove("hide", "warn", "bad");
+    box.textContent = "Asking GitHub what the newest version is…";
+  }
+  $("check-update").disabled = true;
+  const data = await api("/api/update-check", {});
+  $("check-update").disabled = false;
+  if (!data.ok) {
+    if (quiet) return;          // an unasked-for check fails silently
+    box.classList.remove("hide", "warn");
+    box.classList.add("bad");
+    box.textContent = data.error;
+    return;
+  }
+  if (!data.newer) {
+    if (quiet) return;
+    box.classList.remove("hide", "warn", "bad");
+    box.textContent = `You have the newest version (${escapeHtml(data.current)}).`;
+    return;
+  }
+  box.classList.remove("hide", "bad");
+  box.classList.add("warn");
+  box.innerHTML =
+    `<b>Version ${escapeHtml(data.latest)} is available.</b> You have ` +
+    `${escapeHtml(data.current)}. ` +
+    `<a href="${escapeHtml(data.url)}" target="_blank" rel="noopener noreferrer">` +
+    `Read what changed</a>, then:<br><br>` +
+    `<button id="do-update">Install version ${escapeHtml(data.latest)}</button>`;
+  $("do-update").onclick = installUpdate;
+}
+
+async function installUpdate() {
+  $("do-update").disabled = true;
+  const started = await api("/api/update", {});
+  if (!started.ok) { $("do-update").disabled = false; return; }
+  updateCursor = 0;
+  $("update-log").innerHTML = "";
+  $("update-log").classList.remove("hide");
+  updatePoller = setInterval(pollUpdate, 400);
+}
+
+async function pollUpdate() {
+  const state = await api("/api/update-status?cursor=" + updateCursor);
+  updateCursor = state.cursor;
+  for (const line of state.lines) {
+    const row = document.createElement("div");
+    row.className = line.state;
+    row.innerHTML = `<span class="tag"></span><span>${escapeHtml(line.text)}</span>`;
+    $("update-log").appendChild(row);
+  }
+  $("update-log").scrollTop = $("update-log").scrollHeight;
+  if (state.finished) {
+    clearInterval(updatePoller);
+    const box = $("update-box");
+    box.classList.remove("warn", "bad");
+    if (state.exitCode === 0) {
+      box.textContent = "Update installed. Quit the app and open it again.";
+    } else {
+      box.classList.add("bad");
+      box.textContent = "The update was not installed. Nothing was changed, "
+        + "and the version you have still works.";
+    }
+  }
+}
 
 function escapeHtml(text) {
   return text.replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));

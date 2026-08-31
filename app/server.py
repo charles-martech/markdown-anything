@@ -85,7 +85,38 @@ READER_PACKAGES = [
 LOCAL_HOSTNAMES = {"127.0.0.1", "localhost", "::1"}
 MAX_BODY = 1 << 20
 
+REPO = "charles-martech/markdown-anything"
+RELEASES_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
+# An update installs a whole copy of the app's files here and the launcher
+# prefers it, so an update never rewrites the bundle in /Applications. Deleting
+# this folder puts back the version that shipped in the bundle.
+PAYLOAD_DIR = SUPPORT / "current"
+# Whether to look for updates without being asked. Unset until the person has
+# been asked once and answered; the app checks nothing until they have.
+SETTINGS_FILE = SUPPORT / "settings.json"
+CHECK_INTERVAL = 24 * 60 * 60
+# A release tag is text from the network. It is only ever a version number.
+TAG_RE = re.compile(r"v?\d+(?:\.\d+){0,3}")
+
 PROGRESS_RE = re.compile(r"^\[(\d+)/(\d+)\]\s+(ok|--|FAIL)\s+(.*)$")
+
+
+def read_stamp(name: str, default: str) -> str:
+    """A one-line file written beside the app's own files at build time."""
+    try:
+        return (ROOT / name).read_text(encoding="utf-8").strip() or default
+    except OSError:
+        return default
+
+
+VERSION = read_stamp("VERSION", "0.0.0")
+# The parts of the bundle an update cannot replace: the launcher, Info.plist
+# and the icon. A release needing a newer one needs the installer, not us.
+BUNDLE_FORMAT = read_stamp("BUNDLE_FORMAT", "1")
+
+
+def version_tuple(text: str) -> tuple:
+    return tuple(int(part) for part in re.findall(r"\d+", text)[:4])
 
 
 class Run:
@@ -178,6 +209,8 @@ def watchdog(server: ThreadingHTTPServer) -> None:
             busy = RUN.process is not None and not RUN.finished
         with INSTALL.lock:
             busy = busy or (INSTALL.lines and not INSTALL.finished)
+        with UPDATE.lock:
+            busy = busy or (UPDATE.lines and not UPDATE.finished)
         if not busy and time.monotonic() - LAST_REQUEST > IDLE_TIMEOUT:
             server.shutdown()
             return
@@ -549,6 +582,233 @@ def start_install() -> dict:
 
 
 # --------------------------------------------------------------------------
+# Updating the app, when the person asks
+# --------------------------------------------------------------------------
+#
+# Nothing here runs on its own. The app makes no network request that was not
+# asked for by a click, which is the same promise the setup step keeps, and the
+# reason there is a button rather than a check on every launch.
+
+UPDATE = Run()
+
+
+def read_settings() -> dict:
+    try:
+        saved = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return saved if isinstance(saved, dict) else {}
+
+
+def write_settings(values: dict) -> None:
+    try:
+        private_dir(SUPPORT)
+        handle = os.open(SETTINGS_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                         0o600)
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            out.write(json.dumps(values))
+    except OSError:
+        # A full or read-only disk. The answer is not worth refusing to run
+        # over: the app asks again next time, which is the safe way to be
+        # wrong — it never checks the network on an answer it does not have.
+        pass
+
+
+def settings_for_page() -> dict:
+    """What the page needs to know: the answer, and whether it has one.
+
+    `autoCheck` is None until the person has chosen, which is what makes the
+    page ask rather than assume. Assuming either way would be answering a
+    question about their privacy on their behalf.
+    """
+    saved = read_settings()
+    auto = saved.get("autoCheck")
+    due = (time.time() - float(saved.get("lastCheck") or 0)) > CHECK_INTERVAL
+    return {"version": VERSION,
+            "autoCheck": auto if isinstance(auto, bool) else None,
+            "checkNow": auto is True and due}
+
+
+def set_auto_check(enabled: bool) -> dict:
+    saved = read_settings()
+    saved["autoCheck"] = enabled
+    write_settings(saved)
+    return {"ok": True, "autoCheck": enabled}
+
+
+def note_check() -> None:
+    saved = read_settings()
+    saved["lastCheck"] = time.time()
+    write_settings(saved)
+
+
+def latest_release() -> dict:
+    """The newest release on GitHub, or {} if it cannot be asked."""
+    try:
+        request = urllib.request.Request(  # noqa: S310 - constant https URL
+            RELEASES_LATEST, headers={"Accept": "application/vnd.github+json",
+                                      "User-Agent": "document-to-markdown"})
+        with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310
+            release = json.load(response)
+    except (urllib.error.URLError, ValueError, TimeoutError, OSError):
+        return {}
+    tag = str(release.get("tag_name") or "")
+    if not TAG_RE.fullmatch(tag):
+        return {}   # not a version number; nothing we are willing to fetch
+    return {"tag": tag, "url": str(release.get("html_url") or ""),
+            "name": str(release.get("name") or tag)}
+
+
+def update_status() -> dict:
+    """What the page shows when it has asked GitHub for the newest version."""
+    note_check()
+    release = latest_release()
+    if not release:
+        return {"ok": False,
+                "error": "Could not reach GitHub to ask what the newest "
+                         "version is. Check your connection and try again."}
+    newer = version_tuple(release["tag"]) > version_tuple(VERSION)
+    return {"ok": True, "current": VERSION, "latest": release["tag"],
+            "newer": newer, "url": release["url"], "name": release["name"]}
+
+
+def payload_root(unpacked: Path) -> Path:
+    """The folder inside a release archive that holds the app's own files.
+
+    A GitHub source archive wraps everything in one directory named after the
+    tag, so this looks one level down, and then checks that what it found is
+    actually this app rather than trusting the shape of the download.
+    """
+    candidates = [unpacked, *[p for p in unpacked.iterdir() if p.is_dir()]]
+    for candidate in candidates:
+        if all((candidate / part).is_file() for part in
+               ("app/server.py", "app/index.html", "scripts/doc2gfm.py",
+                "VERSION", "BUNDLE_FORMAT")):
+            return candidate
+    raise UnsafeArchive("that download does not contain the app's files")
+
+
+def preflight(root: Path) -> tuple[bool, str]:
+    """Start the downloaded server, once, before trusting it with the app.
+
+    A release that cannot start would otherwise leave the icon doing nothing
+    and no obvious way back, so it is run here first and discarded if it fails.
+    """
+    with tempfile.TemporaryDirectory(prefix="mda-check-") as tmp:
+        env = dict(os.environ, DOC2MD_HOME=tmp)
+        try:
+            result = subprocess.run(
+                [sys.executable, str(root / "app" / "server.py"), "--selftest"],
+                capture_output=True, text=True, timeout=120, env=env)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return False, str(exc)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        return False, detail[-1][:200] if detail else f"exit {result.returncode}"
+    return True, ""
+
+
+def install_payload(root: Path) -> None:
+    """Put a checked copy of the app's files where the launcher looks.
+
+    The swap is two renames inside one folder, so a version that failed to copy
+    never becomes the one that runs.
+    """
+    private_dir(SUPPORT)
+    staging = SUPPORT / "current.new"
+    previous = SUPPORT / "current.old"
+    for path in (staging, previous):
+        shutil.rmtree(path, ignore_errors=True)
+    shutil.copytree(root, staging)
+    if PAYLOAD_DIR.exists():
+        os.replace(PAYLOAD_DIR, previous)
+    os.replace(staging, PAYLOAD_DIR)
+    shutil.rmtree(previous, ignore_errors=True)
+
+
+def start_update() -> dict:
+    with UPDATE.lock:
+        if UPDATE.lines and not UPDATE.finished:
+            return {"ok": False, "error": "An update is already running."}
+    UPDATE.reset("")
+
+    def worker() -> None:
+        ok = run_update(UPDATE)
+        with UPDATE.lock:
+            UPDATE.finished = True
+            UPDATE.exit_code = 0 if ok else 1
+
+    threading.Thread(target=worker, daemon=True).start()
+    return {"ok": True}
+
+
+def run_update(run: Run) -> bool:
+    release = latest_release()
+    if not release:
+        _say(run, "Could not reach GitHub to ask for the newest version.", "fail")
+        return False
+    tag = release["tag"]
+    if version_tuple(tag) <= version_tuple(VERSION):
+        _say(run, f"Already up to date ({VERSION}).", "ok")
+        return True
+    url = f"https://github.com/{REPO}/archive/refs/tags/{tag}.tar.gz"
+    if not trusted_download(url):
+        _say(run, "Refusing to download from an unexpected address.", "fail")
+        return False
+    _say(run, f"Downloading {tag}...")
+    with tempfile.TemporaryDirectory(prefix="mda-update-") as tmp:
+        archive = Path(tmp) / "release.tar.gz"
+        try:
+            request = urllib.request.Request(  # noqa: S310 - checked above
+                url, headers={"User-Agent": "document-to-markdown"})
+            opened = urllib.request.urlopen(request, timeout=300)  # noqa: S310
+            with opened as response, archive.open("wb") as out:
+                shutil.copyfileobj(response, out)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            _say(run, f"Could not download the update: {exc}", "fail")
+            return False
+        _say(run, "Unpacking...")
+        unpacked = Path(tmp) / "unpacked"
+        try:
+            extract_archive(archive, "release.tar.gz", unpacked)
+            root = payload_root(unpacked)
+        except UnsafeArchive as exc:
+            _say(run, f"That download was refused: {exc}", "fail")
+            return False
+        except (tarfile.TarError, OSError) as exc:
+            _say(run, f"The download was damaged: {exc}", "fail")
+            return False
+        wanted = read_stamp_from(root, "BUNDLE_FORMAT", "1")
+        if version_tuple(wanted) > version_tuple(BUNDLE_FORMAT):
+            _say(run, f"{tag} changes parts of the app that an update cannot "
+                      "replace. Run the install line again to get it:", "fail")
+            _say(run, "curl -fsSL https://raw.githubusercontent.com/"
+                      f"{REPO}/main/install.sh | bash", "fail")
+            return False
+        _say(run, "Checking that it runs...")
+        started, detail = preflight(root)
+        if not started:
+            _say(run, f"{tag} did not start on this Mac, so nothing was "
+                      f"changed: {detail}", "fail")
+            return False
+        try:
+            install_payload(root)
+        except OSError as exc:
+            _say(run, f"Could not install the update: {exc}", "fail")
+            return False
+    _say(run, f"Updated to {tag}. Quit the app and open it again to use it.",
+         "ok")
+    return True
+
+
+def read_stamp_from(root: Path, name: str, default: str) -> str:
+    try:
+        return (root / name).read_text(encoding="utf-8").strip() or default
+    except OSError:
+        return default
+
+
+# --------------------------------------------------------------------------
 # Running a conversion
 # --------------------------------------------------------------------------
 
@@ -769,6 +1029,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(RUN.snapshot(self._cursor(query)))
         elif parsed.path == "/api/report":
             self._send(read_report())
+        elif parsed.path == "/api/settings":
+            self._send(settings_for_page())
+        elif parsed.path == "/api/update-status":
+            self._send(UPDATE.snapshot(self._cursor(query)))
         else:
             self._send({"error": "not found"}, 404)
 
@@ -814,6 +1078,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(result)
         elif parsed.path == "/api/install":
             self._send(start_install())
+        elif parsed.path == "/api/update-check":
+            self._send(update_status())
+        elif parsed.path == "/api/settings":
+            self._send(set_auto_check(bool(payload.get("autoCheck"))))
+        elif parsed.path == "/api/update":
+            self._send(start_update())
         elif parsed.path == "/api/convert":
             self._send(start_conversion(payload))
         elif parsed.path == "/api/cancel":
@@ -904,7 +1174,45 @@ def _dialog(message: str) -> None:
         print(message, file=sys.stderr)
 
 
+def selftest() -> int:
+    """Start, answer one request, and stop. Prints nothing when it works.
+
+    This is what a downloaded update is put through before it is allowed to
+    replace the copy that is already working, so it has to exercise the parts
+    that would actually fail: binding the port, serving the page, and finding
+    the converter it drives.
+    """
+    if not CONVERTER.exists():
+        print(f"converter missing at {CONVERTER}", file=sys.stderr)
+        return 1
+    try:
+        server = Server(("127.0.0.1", 0), Handler)
+    except OSError as exc:
+        print(f"could not bind: {exc}", file=sys.stderr)
+        return 1
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for path in (f"/api/ping?token={TOKEN}", "/"):
+            request = urllib.request.Request(  # noqa: S310 - our own loopback
+                f"http://127.0.0.1:{port}{path}")
+            with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310
+                if response.status != 200:
+                    print(f"{path} answered {response.status}", file=sys.stderr)
+                    return 1
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        print(f"did not answer: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        server.shutdown()
+        server.server_close()
+    return 0
+
+
 def main() -> int:
+    if "--selftest" in sys.argv:        # used before installing an update
+        return selftest()
     if "--serve" in sys.argv:
         return serve()
     if "--no-browser" in sys.argv:      # tests and terminal use

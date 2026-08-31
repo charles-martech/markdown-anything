@@ -5,12 +5,35 @@
 # From anywhere, in one line:
 #   curl -fsSL https://raw.githubusercontent.com/charles-martech/markdown-anything/main/install.sh | bash
 #
-# It copies the app into /Applications, adds a Desktop shortcut, and opens it.
-# It never asks for an administrator password and installs nothing system-wide.
+# It installs the newest release, copies the app into /Applications, adds a
+# Desktop shortcut, and opens it. It never asks for an administrator password
+# and installs nothing system-wide.
+#
+# MDA_REF=main ./install.sh installs a branch instead of the newest release,
+# for trying something before it is released.
 set -euo pipefail
 
 REPO_URL="https://github.com/charles-martech/markdown-anything"
 say() { printf '%s\n' "$1"; }
+
+# The newest release tag. git ls-remote is asked first because, unlike the
+# API, it has no rate limit to run into. If neither answers — offline, or a
+# repository with no releases yet — fall back to the default branch and say so,
+# rather than refusing to install anything.
+latest_release() {
+  local tag=""
+  if command -v git >/dev/null 2>&1; then
+    tag="$(git ls-remote --tags --refs --sort=-v:refname "$REPO_URL.git" 'v*' \
+           2>/dev/null | head -1 | sed 's|.*refs/tags/||')"
+  fi
+  if [ -z "$tag" ]; then
+    tag="$(curl -fsSL --max-time 20 \
+           "https://api.github.com/repos/charles-martech/markdown-anything/releases/latest" \
+           2>/dev/null | grep -m1 '"tag_name"' \
+           | sed -E 's/.*"tag_name"[^"]*"([^"]+)".*/\1/')"
+  fi
+  printf '%s' "$tag"
+}
 
 if [ "$(uname -s)" != "Darwin" ]; then
   say "This installer builds a Mac app. On Linux or Windows, run the converter"
@@ -27,13 +50,26 @@ fi
 
 TEMP=""
 if [ -z "$SOURCE" ]; then
-  say "Downloading Document to Markdown..."
+  REF="${MDA_REF:-}"
+  if [ -z "$REF" ]; then
+    REF="$(latest_release)"
+    if [ -z "$REF" ]; then
+      REF="main"
+      say "Could not reach GitHub to ask for the newest release."
+      say "Installing the latest code from the main branch instead."
+    fi
+  fi
+  say "Downloading Document to Markdown $REF..."
   TEMP="$(mktemp -d)"
   if command -v git >/dev/null 2>&1; then
-    git clone --depth 1 --quiet "$REPO_URL.git" "$TEMP/src"
+    git clone --depth 1 --branch "$REF" --quiet "$REPO_URL.git" "$TEMP/src"
   else
-    curl -fsSL "$REPO_URL/archive/refs/heads/main.tar.gz" | tar -xz -C "$TEMP"
-    mv "$TEMP"/*-main "$TEMP/src"
+    case "$REF" in
+      v*) URL="$REPO_URL/archive/refs/tags/$REF.tar.gz" ;;
+      *)  URL="$REPO_URL/archive/refs/heads/$REF.tar.gz" ;;
+    esac
+    curl -fsSL "$URL" | tar -xz -C "$TEMP"
+    mv "$TEMP"/markdown-anything-* "$TEMP/src"
   fi
   SOURCE="$TEMP/src"
 fi
@@ -50,6 +86,14 @@ urllib.request.urlopen(urllib.request.Request(
     url, data=b"{}", headers={"Content-Type": "application/json"}), timeout=2)
 STOP
   say "Stopped the copy that was already running."
+fi
+
+# An in-app update leaves a newer copy of the app's files in the support
+# folder, and the launcher prefers it. Clearing it means running this installer
+# always gets you the version it just downloaded, not one updated into place
+# earlier.
+if [ -n "${HOME:-}" ]; then
+  rm -rf "$HOME/Library/Application Support/Document to Markdown/current"
 fi
 
 say "Building the app..."
