@@ -366,7 +366,7 @@ async function refreshEngines() {
     div.innerHTML = `<b>${escapeHtml(engine.name)} is not installed.</b> ` +
       `Everything else still works: without it, ${escapeHtml(engine.purpose)} ` +
       `cannot be converted. ` +
-      `<a href="${engine.link}" target="_blank" rel="noreferrer">Download it here</a> ` +
+      `<a href="${escapeHtml(engine.link)}" target="_blank" rel="noopener noreferrer">Download it here</a> ` +
       `if you need those files.`;
     box.appendChild(div);
   }

@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Read-only by default: nothing here needs to write to the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test on Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is what an older Mac ships with, so it has to keep working.
+        python: ["3.9", "3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install the converter's engines
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends pandoc poppler-utils
+          python -m pip install --quiet openpyxl
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Convert a fixture of every major format
+        run: bash scripts/selftest.sh
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Ruff
+        run: |
+          # Pinned: an unpinned linter turns "someone else released a
+          # version" into a red build on a pull request that changed nothing.
+          # Raising it is a deliberate change, and docs/maintenance.md says so.
+          python -m pip install --quiet ruff==0.15.8
+          ruff check .
+      - name: Shell scripts
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck install.sh macos/build_app.sh scripts/setup.sh scripts/selftest.sh
+
+  app:
+    name: Build the Mac app
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the bundle into a temporary folder
+        run: |
+          APP="$(bash macos/build_app.sh "$RUNNER_TEMP/Applications")"
+          test -x "$APP/Contents/MacOS/launcher"
+          test -f "$APP/Contents/Resources/app/server.py"
+          test -f "$APP/Contents/Resources/scripts/doc2gfm.py"
+          plutil -lint "$APP/Contents/Info.plist"
+      - name: The server starts, answers, and stops
+        run: |
+          export DOC2MD_HOME="$RUNNER_TEMP/support"
+          # -u so the server's own output reaches the log unbuffered, and a
+          # file to keep it in, so a start that fails says why instead of
+          # leaving the step to time out against a missing instance.json.
+          python3 -u app/server.py --no-browser > "$RUNNER_TEMP/server.log" 2>&1 &
+          for _ in $(seq 60); do
+            [ -f "$DOC2MD_HOME/instance.json" ] && break
+            sleep 0.5
+          done
+          if [ ! -f "$DOC2MD_HOME/instance.json" ]; then
+            echo "The server never wrote instance.json. Its output was:"
+            cat "$RUNNER_TEMP/server.log" || true
+            ls -la "$DOC2MD_HOME" || true
+            exit 1
+          fi
+          PORT=$(python3 -c "import json,os;print(json.load(open(os.environ['DOC2MD_HOME']+'/instance.json'))['port'])")
+          TOKEN=$(python3 -c "import json,os;print(json.load(open(os.environ['DOC2MD_HOME']+'/instance.json'))['token'])")
+          curl -fsS "http://127.0.0.1:$PORT/api/ping?token=$TOKEN"
+          curl -fsS -X POST "http://127.0.0.1:$PORT/api/quit?token=$TOKEN"

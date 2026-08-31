@@ -10,8 +10,9 @@ It can also install what it needs: pandoc is fetched from its official GitHub
 release into this app's own support folder, so a person never has to install
 Homebrew, run a terminal command, or type an administrator password.
 
-Nothing listens on a public interface and every request carries a token minted
-at startup, so another page in the same browser cannot drive the converter.
+Nothing listens on a public interface, every request carries a token minted at
+startup, and requests naming any host but this one are refused, so no other
+page in the same browser can read that token or drive the converter.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ import platform
 import re
 import secrets
 import shutil
+import socketserver
 import subprocess
 import sys
 import tarfile
@@ -65,6 +67,23 @@ EXTRA_TOOL_DIRS = [
 PANDOC_RELEASES = "https://api.github.com/repos/jgm/pandoc/releases/latest"
 PANDOC_FALLBACK = "3.1.11"
 LIBREOFFICE_PAGE = "https://www.libreoffice.org/download/download-libreoffice/"
+# Downloads only ever come from GitHub's own hosts. The asset URL arrives
+# inside an API response, so it is data from the network and is checked before
+# anything is fetched from it.
+DOWNLOAD_HOSTS = {
+    "github.com", "api.github.com", "codeload.github.com",
+    "objects.githubusercontent.com", "release-assets.githubusercontent.com",
+    "raw.githubusercontent.com",
+}
+# The reader libraries, with upper bounds: a future major release cannot change
+# what this app puts on someone's machine without a deliberate edit here.
+READER_PACKAGES = [
+    ("pymupdf4llm", "pymupdf4llm>=0.0.17,<2"),
+    ("openpyxl", "openpyxl>=3.1,<4"),
+]
+# A request has to look like it came from this server's own page.
+LOCAL_HOSTNAMES = {"127.0.0.1", "localhost", "::1"}
+MAX_BODY = 1 << 20
 
 PROGRESS_RE = re.compile(r"^\[(\d+)/(\d+)\]\s+(ok|--|FAIL)\s+(.*)$")
 
@@ -119,6 +138,19 @@ LAST_REQUEST = time.monotonic()
 PORT_FILE = SUPPORT / "instance.json"
 
 
+def private_dir(path: Path) -> Path:
+    """Create a directory only this user can open: it holds the app's token."""
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        path.chmod(0o700)
+    except OSError:
+        # A filesystem that does not do Unix permissions, or a folder owned by
+        # somebody else. Neither is worth refusing to start over: the token
+        # file below is created with its own permissions regardless.
+        pass
+    return path
+
+
 def note_request() -> None:
     global LAST_REQUEST
     LAST_REQUEST = time.monotonic()
@@ -129,8 +161,9 @@ def existing_instance() -> str | None:
     try:
         saved = json.loads(PORT_FILE.read_text())
         url = f"http://127.0.0.1:{int(saved['port'])}/"
-        request = urllib.request.Request(f"{url}api/ping?token={saved['token']}")
-        with urllib.request.urlopen(request, timeout=1.5) as response:
+        request = urllib.request.Request(  # noqa: S310 - loopback URL built here
+            f"{url}api/ping?token={saved['token']}")
+        with urllib.request.urlopen(request, timeout=1.5) as response:  # noqa: S310
             if response.status == 200:
                 return url
     except Exception:  # noqa: BLE001 - any failure means "no usable instance"
@@ -199,12 +232,28 @@ def python_module_available(name: str) -> bool:
 # Folder picking and revealing, per platform
 # --------------------------------------------------------------------------
 
+PROMPT_RE = re.compile(r"[^\w ,.:'()/-]")
+
+
+def osascript(script: str, *arguments: str) -> subprocess.CompletedProcess:
+    """Run AppleScript with its values passed in as arguments.
+
+    Text is never pasted into the script itself. Anything that reached here
+    from the page would otherwise be AppleScript for the machine to run, which
+    is a whole computer's worth of trouble for the sake of a dialog title.
+    """
+    return subprocess.run(["osascript", "-e", script, *arguments],
+                          capture_output=True, text=True)
+
+
 def pick_folder(prompt: str) -> str:
     """Native folder chooser. Returns "" when cancelled or unavailable."""
+    prompt = PROMPT_RE.sub(" ", str(prompt))[:120].strip() or "Choose a folder"
     if IS_MAC:
-        script = (f'POSIX path of (choose folder with prompt "{prompt}")')
-        proc = subprocess.run(["osascript", "-e", script],
-                              capture_output=True, text=True)
+        proc = osascript(
+            "on run argv\n"
+            "  return POSIX path of (choose folder with prompt (item 1 of argv))\n"
+            "end run", prompt)
         return proc.stdout.strip().rstrip("/") if proc.returncode == 0 else ""
     for tool, args in (
         ("zenity", ["--file-selection", "--directory", f"--title={prompt}"]),
@@ -216,14 +265,32 @@ def pick_folder(prompt: str) -> str:
     return ""
 
 
+BUNDLE_SUFFIXES = {".app", ".pkg", ".command", ".workflow", ".scpt", ".dmg"}
+
+
 def reveal(path: str) -> bool:
-    target = Path(path).expanduser()
-    if not target.exists():
+    """Show a path in the file manager.
+
+    A file is revealed inside its folder rather than opened: `open` hands a
+    document to whichever application claims it, and on a bundle it would run
+    the bundle. Nothing here ever launches what it is pointed at.
+    """
+    if not isinstance(path, str) or not path:
         return False
-    opener = "open" if IS_MAC else "xdg-open"
-    if not shutil.which(opener):
+    try:
+        target = Path(path).expanduser().resolve(strict=True)
+    except OSError:
         return False
-    subprocess.Popen([opener, str(target)],
+    opener = shutil.which("open" if IS_MAC else "xdg-open")
+    if not opener:
+        return False
+    plain_folder = (target.is_dir()
+                    and target.suffix.lower() not in BUNDLE_SUFFIXES)
+    if IS_MAC:
+        command = [opener, str(target)] if plain_folder else [opener, "-R", str(target)]
+    else:
+        command = [opener, str(target if plain_folder else target.parent)]
+    subprocess.Popen(command,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return True
 
@@ -284,6 +351,77 @@ def _say(run: Run, text: str, state: str = "info") -> None:
         run.lines.append({"state": state, "text": text})
 
 
+class UnsafeArchive(Exception):
+    """A downloaded archive held a member pointing outside its own folder."""
+
+
+def trusted_download(url: str) -> bool:
+    """Only https, and only GitHub's own hosts."""
+    parsed = urlparse(url)
+    return (parsed.scheme == "https"
+            and (parsed.hostname or "").lower() in DOWNLOAD_HOSTS)
+
+
+def extract_archive(archive: Path, name: str, target: Path) -> None:
+    """Unpack a download, writing only the files that belong inside `target`.
+
+    An archive is untrusted input even when it came from a trusted host, so
+    nothing here hands it to `extractall`: members are written one at a time,
+    each to a path checked to be inside the folder, and links are not written
+    at all. A link is what makes the check-then-extract pattern unsafe — an
+    early symlink can move where a later member lands — and Pandoc does not
+    need them: `bin/pandoc` is a real file, and `pandoc-lua` and
+    `pandoc-server`, the two symlinks beside it, are not used by this app.
+    """
+    target.mkdir(parents=True, exist_ok=True)
+    root = target.resolve()
+
+    def destination(member: str) -> Path:
+        """Where a member may be written, or UnsafeArchive if that is out."""
+        parts = Path(member).parts
+        if not member or member.startswith("/") or ".." in parts:
+            raise UnsafeArchive(member)
+        # normpath, not resolve: this must not follow anything on disk.
+        chosen = Path(os.path.normpath(root / member))
+        if chosen != root and root not in chosen.parents:
+            raise UnsafeArchive(member)
+        return chosen
+
+    def write(source, path: Path, executable: bool) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as out:
+            shutil.copyfileobj(source, out)
+        if executable:
+            path.chmod(0o755)
+
+    if name.endswith(".zip"):
+        with zipfile.ZipFile(archive) as zf:
+            for entry in zf.infolist():
+                path = destination(entry.filename)
+                mode = (entry.external_attr >> 16) & 0xFFFF
+                if entry.is_dir():
+                    path.mkdir(parents=True, exist_ok=True)
+                elif mode & 0o170000 == 0o120000:  # a symlink
+                    continue
+                else:
+                    with zf.open(entry) as source:
+                        write(source, path, bool(mode & 0o111))
+        return
+    with tarfile.open(archive) as tf:
+        for member in tf.getmembers():
+            path = destination(member.name)
+            if member.isdir():
+                path.mkdir(parents=True, exist_ok=True)
+                continue
+            if not member.isfile():   # links, devices, anything else
+                continue
+            source = tf.extractfile(member)
+            if source is None:
+                continue
+            with source:
+                write(source, path, bool(member.mode & 0o111))
+
+
 def pandoc_asset() -> tuple[str, str]:
     """URL of the official pandoc build for this machine, and its file name."""
     machine = platform.machine().lower()
@@ -294,14 +432,15 @@ def pandoc_asset() -> tuple[str, str]:
         arch = "arm64" if machine in ("arm64", "aarch64") else "amd64"
         pattern = re.compile(rf"pandoc-([\d.]+)-linux-{arch}\.tar\.gz$")
     try:
-        request = urllib.request.Request(
+        request = urllib.request.Request(  # noqa: S310 - constant https URL
             PANDOC_RELEASES, headers={"Accept": "application/vnd.github+json",
                                       "User-Agent": "document-to-markdown"})
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
             release = json.load(response)
         for asset in release.get("assets", []):
-            if pattern.search(asset.get("name", "")):
-                return asset["browser_download_url"], asset["name"]
+            url = asset.get("browser_download_url", "")
+            if pattern.search(asset.get("name", "")) and trusted_download(url):
+                return url, asset["name"]
     except (urllib.error.URLError, ValueError, KeyError, TimeoutError):
         pass  # rate limited or offline: fall back to a known-good version
     version = PANDOC_FALLBACK
@@ -315,15 +454,19 @@ def install_pandoc(run: Run) -> bool:
         _say(run, "Pandoc is already installed.", "ok")
         return True
     url, name = pandoc_asset()
+    if not trusted_download(url):
+        _say(run, "Refusing to download Pandoc from an unexpected address.", "fail")
+        return False
     _say(run, f"Downloading {name} (about 30 MB)...")
     BIN_DIR.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="mda-") as tmp:
         archive = Path(tmp) / name
         try:
-            request = urllib.request.Request(
+            # trusted_download() above has already checked the scheme and host.
+            request = urllib.request.Request(  # noqa: S310
                 url, headers={"User-Agent": "document-to-markdown"})
-            with urllib.request.urlopen(request, timeout=300) as response, \
-                    archive.open("wb") as out:
+            opened = urllib.request.urlopen(request, timeout=300)  # noqa: S310
+            with opened as response, archive.open("wb") as out:
                 shutil.copyfileobj(response, out)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             _say(run, f"Could not download Pandoc: {exc}", "fail")
@@ -331,13 +474,12 @@ def install_pandoc(run: Run) -> bool:
         _say(run, "Unpacking...")
         target = Path(tmp) / "unpacked"
         try:
-            if name.endswith(".zip"):
-                with zipfile.ZipFile(archive) as zf:
-                    zf.extractall(target)
-            else:
-                with tarfile.open(archive) as tf:
-                    tf.extractall(target)
-        except (zipfile.BadZipFile, tarfile.TarError) as exc:
+            extract_archive(archive, name, target)
+        except UnsafeArchive as exc:
+            _say(run, f"That Pandoc download tried to write outside its own "
+                      f"folder ({exc}) and was discarded.", "fail")
+            return False
+        except (zipfile.BadZipFile, tarfile.TarError, OSError) as exc:
             _say(run, f"The download was damaged: {exc}", "fail")
             return False
         found = next((p for p in target.rglob("pandoc")
@@ -361,10 +503,10 @@ def install_pandoc(run: Run) -> bool:
     return True
 
 
-def install_python_packages(run: Run, packages: list[str]) -> bool:
+def install_python_packages(run: Run, packages: list[tuple[str, str]]) -> bool:
     """Install into our own folder, so the system Python is left untouched."""
-    missing = [p for p in packages
-               if not python_module_available(p.replace("-", "_"))]
+    missing = [requirement for module, requirement in packages
+               if not python_module_available(module)]
     if not missing:
         _say(run, "Reader libraries are already installed.", "ok")
         return True
@@ -372,6 +514,7 @@ def install_python_packages(run: Run, packages: list[str]) -> bool:
     PYLIB_DIR.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         [sys.executable, "-m", "pip", "install", "--quiet", "--upgrade",
+         "--no-input", "--disable-pip-version-check",
          "--target", str(PYLIB_DIR), *missing],
         capture_output=True, text=True, timeout=900)
     if result.returncode != 0:
@@ -393,7 +536,7 @@ def start_install() -> dict:
         ok = install_pandoc(INSTALL)
         # PyMuPDF reads PDFs and openpyxl reads Excel. Neither is required for
         # the app to be useful, so a failure here is reported, not fatal.
-        ok = install_python_packages(INSTALL, ["pymupdf4llm", "openpyxl"]) and ok
+        ok = install_python_packages(INSTALL, READER_PACKAGES) and ok
         with INSTALL.lock:
             INSTALL.finished = True
             INSTALL.exit_code = 0 if ok else 1
@@ -410,10 +553,15 @@ def start_install() -> dict:
 # --------------------------------------------------------------------------
 
 def start_conversion(options: dict) -> dict:
-    source = Path(options.get("source", "")).expanduser()
+    raw_source = options.get("source")
+    if not isinstance(raw_source, str) or not raw_source.strip():
+        return {"ok": False, "error": "Choose a folder or file to convert."}
+    source = Path(raw_source).expanduser()
     if not source.exists():
         return {"ok": False, "error": "Choose a folder or file to convert."}
-    output = options.get("output") or default_output(str(source))
+    output = options.get("output")
+    if not isinstance(output, str) or not output.strip():
+        output = default_output(str(source))
     output_path = Path(output).expanduser()
     if source.is_dir() and (output_path == source
                             or str(output_path).startswith(str(source) + os.sep)):
@@ -436,10 +584,14 @@ def start_conversion(options: dict) -> dict:
         command.append("--no-em-dash")
     if options.get("ocr"):
         command.append("--ocr")
-    only = (options.get("only") or "").strip()
+    only = options.get("only")
+    only = only.strip() if isinstance(only, str) else ""
     for extension in re.split(r"[,\s]+", only):
-        if extension:
-            command += ["--include", extension.lstrip(".")]
+        cleaned = extension.lstrip(".").lower()
+        # An extension is letters and digits. Anything else is not a file type
+        # anyone has, and has no business becoming part of a command line.
+        if cleaned and re.fullmatch(r"[a-z0-9]{1,16}", cleaned):
+            command += ["--include", cleaned]
 
     RUN.reset(str(output_path))
     thread = threading.Thread(target=_run, args=(command,), daemon=True)
@@ -503,17 +655,40 @@ def read_report() -> dict:
 # HTTP plumbing
 # --------------------------------------------------------------------------
 
+class Server(ThreadingHTTPServer):
+    """A loopback server that does not go looking for itself in DNS.
+
+    HTTPServer.server_bind calls socket.getfqdn() on the address it just bound,
+    which is a reverse DNS lookup of 127.0.0.1. On a machine whose resolver is
+    slow or unreachable that blocks for half a minute or more, before this
+    program has printed a word or written its instance file: from the outside,
+    clicking the icon does nothing at all. The name it looks up is only used to
+    fill in headers this server does not send.
+    """
+
+    def server_bind(self) -> None:
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "127.0.0.1"
+        self.server_port = self.server_address[1]
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "doc2gfm-ui"
 
     def log_message(self, *args) -> None:  # keep the terminal quiet
         pass
 
+    def _headers(self) -> None:
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+
     def _send(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self._headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -521,7 +696,40 @@ class Handler(BaseHTTPRequestHandler):
         return secrets.compare_digest(
             (query.get("token") or [""])[0], TOKEN)
 
+    def _from_own_page(self) -> bool:
+        """True when the request came from this server's own page.
+
+        The socket is loopback-only, which stops the network reaching it. This
+        stops the other way in: a public web page whose domain is pointed at
+        127.0.0.1 would otherwise count as the same origin as this app, and
+        could read the token out of the page and drive the converter. Such a
+        request carries that site's name in Host or Origin, so both are checked
+        against the only names this server answers to.
+        """
+        host = (self.headers.get("Host") or "").strip()
+        if host.startswith("["):                       # [::1]:port
+            hostname = host[1:host.index("]")] if "]" in host else ""
+        else:
+            hostname = host.split(":", 1)[0]
+        if hostname.lower() not in LOCAL_HOSTNAMES:
+            return False
+        origin = self.headers.get("Origin")
+        if origin and (urlparse(origin).hostname or "").lower() not in LOCAL_HOSTNAMES:
+            return False
+        # Sent by every current browser; absent on curl and older ones.
+        return self.headers.get("Sec-Fetch-Site") in (None, "same-origin", "none")
+
+    @staticmethod
+    def _cursor(query: dict) -> int:
+        try:
+            return max(0, int((query.get("cursor") or ["0"])[0]))
+        except ValueError:
+            return 0
+
     def do_GET(self) -> None:
+        if not self._from_own_page():
+            self._send({"error": "forbidden"}, 403)
+            return
         note_request()
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
@@ -532,8 +740,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'none'; script-src 'unsafe-inline'; "
+                "style-src 'unsafe-inline'; connect-src 'self'; "
+                "img-src 'self' data:; base-uri 'none'; form-action 'none'")
+            self._headers()
             self.end_headers()
             self.wfile.write(body)
+            return
+        if parsed.path == "/favicon.ico":
+            # The browser asks for this on its own, with no token to give. An
+            # empty answer keeps a needless error out of the console.
+            self.send_response(204)
+            self._headers()
+            self.end_headers()
             return
         if not self._authorized(query):
             self._send({"error": "unauthorized"}, 403)
@@ -543,27 +764,36 @@ class Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/engines":
             self._send({"engines": engine_status()})
         elif parsed.path == "/api/install-status":
-            since = int((query.get("cursor") or ["0"])[0])
-            self._send(INSTALL.snapshot(since))
+            self._send(INSTALL.snapshot(self._cursor(query)))
         elif parsed.path == "/api/status":
-            since = int((query.get("cursor") or ["0"])[0])
-            self._send(RUN.snapshot(since))
+            self._send(RUN.snapshot(self._cursor(query)))
         elif parsed.path == "/api/report":
             self._send(read_report())
         else:
             self._send({"error": "not found"}, 404)
 
     def do_POST(self) -> None:
+        if not self._from_own_page():
+            self._send({"error": "forbidden"}, 403)
+            return
         note_request()
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
         if not self._authorized(query):
             self._send({"error": "unauthorized"}, 403)
             return
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = max(0, int(self.headers.get("Content-Length") or 0))
+        except ValueError:
+            length = 0
+        if length > MAX_BODY:
+            self._send({"error": "request too large"}, 413)
+            return
         try:
             payload = json.loads(self.rfile.read(length) or b"{}")
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            payload = {}
+        if not isinstance(payload, dict):
             payload = {}
         if parsed.path == "/api/pick":
             folder = pick_folder(payload.get("prompt", "Choose a folder"))
@@ -574,7 +804,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(result)
         elif parsed.path == "/api/inspect":
             folder = payload.get("path", "")
-            expanded = str(Path(folder).expanduser()) if folder else ""
+            expanded = (str(Path(folder).expanduser())
+                        if isinstance(folder, str) and folder else "")
             result = {"path": expanded, "exists": bool(expanded)
                       and Path(expanded).exists()}
             if result["exists"]:
@@ -602,12 +833,19 @@ def serve() -> int:
     if not CONVERTER.exists():
         print(f"Converter not found at {CONVERTER}", file=sys.stderr)
         return 2
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = Server(("127.0.0.1", 0), Handler)
     port = server.server_address[1]
     try:
-        SUPPORT.mkdir(parents=True, exist_ok=True)
-        PORT_FILE.write_text(json.dumps({"port": port, "token": TOKEN}))
+        private_dir(SUPPORT)
+        # The token is the key to this server, so the file holding it is
+        # created readable by nobody else, before anything is written into it.
+        handle = os.open(PORT_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            out.write(json.dumps({"port": port, "token": TOKEN}))
     except OSError:
+        # Without this file a second launch cannot find this server and will
+        # start another one. That is worse than one server, and better than
+        # refusing to convert anything at all, so it is not fatal.
         pass
     print(f"Document to Markdown is running at http://127.0.0.1:{port}/")
     print("Close the page and quit from there, or press Ctrl+C here.")
@@ -637,7 +875,7 @@ def launch() -> int:
         webbrowser.open(running)
         return 0
 
-    SUPPORT.mkdir(parents=True, exist_ok=True)
+    private_dir(SUPPORT)
     log = SUPPORT / "log.txt"
     with log.open("ab") as handle:
         subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--serve"],
@@ -657,11 +895,11 @@ def launch() -> int:
 
 def _dialog(message: str) -> None:
     if IS_MAC:
-        subprocess.run(["osascript", "-e",
-                        f'display dialog "{message}" buttons {{"OK"}} '
-                        'default button 1 with icon caution '
-                        'with title "Document to Markdown"'],
-                       capture_output=True)
+        osascript('on run argv\n'
+                  '  display dialog (item 1 of argv) buttons {"OK"} '
+                  'default button 1 with icon caution '
+                  'with title "Document to Markdown"\n'
+                  'end run', message)
     else:
         print(message, file=sys.stderr)
 
