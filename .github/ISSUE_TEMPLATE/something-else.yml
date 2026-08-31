@@ -1,0 +1,25 @@
+name: Something else
+description: A bug in the app, a format worth adding, or an idea.
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What is going on?
+      description: >
+        For a bug, what you did and what happened. For a format, which one and
+        where the files come from.
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Your system
+      placeholder: "macOS 15, or Ubuntu 24.04 running the script directly"
+  - type: textarea
+    id: log
+    attributes:
+      label: Anything in the log
+      description: >
+        macOS: `~/Library/Application Support/Document to Markdown/log.txt`.
+        Please read it before pasting: it holds the paths of folders you converted.
+      render: text

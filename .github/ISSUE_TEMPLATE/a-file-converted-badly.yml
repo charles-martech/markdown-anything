@@ -1,0 +1,42 @@
+name: A file converted badly
+description: A document came out wrong, empty, or not at all.
+labels: ["conversion"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The file that failed is the thing that makes this fixable. If you can
+        attach it, please do. If you cannot share it, a small file that fails
+        the same way works just as well.
+  - type: input
+    id: format
+    attributes:
+      label: What kind of file was it?
+      placeholder: "a .docx exported from Google Docs"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect, and what did you get?
+      placeholder: |
+        Expected: the tables from the document.
+        Got: the text, with the tables missing.
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: What the conversion report said about it, if anything
+      description: The `_conversion-report.md` in the output folder, Failed section.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Your system
+      placeholder: "macOS 15 on Apple silicon, using the app"
+  - type: textarea
+    id: file
+    attributes:
+      label: The file itself
+      description: Drag it in here, if you can share it.

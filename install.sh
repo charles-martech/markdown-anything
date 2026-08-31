@@ -58,7 +58,10 @@ APP="$(bash "$SOURCE/macos/build_app.sh")"
 # A Desktop shortcut, so nobody has to go looking for it.
 DESKTOP="$HOME/Desktop"
 if [ -d "$DESKTOP" ]; then
-  rm -f "$DESKTOP/Document to Markdown"* 2>/dev/null || true
+  # Only our own shortcut, by its exact name. A glob here would take
+  # someone's "Document to Markdown notes.docx" with it.
+  rm -rf "$DESKTOP/Document to Markdown" "$DESKTOP/Document to Markdown.app" \
+    2>/dev/null || true
   /usr/bin/osascript >/dev/null 2>&1 <<OSA || ln -sfn "$APP" "$DESKTOP/Document to Markdown"
 tell application "Finder"
   make alias file to POSIX file "$APP" at POSIX file "$DESKTOP"
