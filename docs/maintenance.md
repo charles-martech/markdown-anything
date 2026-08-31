@@ -50,12 +50,26 @@ There is no build to publish. The install line points at `main`, so **whatever
 is on `main` is what people install**, immediately, on their own machines.
 That is the whole reason CI has to stay green and `main` has to stay protected.
 
-When something user-visible changes, bump `VERSION` in `macos/build_app.sh` and
-add a line to `CHANGELOG.md`. Tag it if you want a point to refer back to:
+A release here is a marker rather than a delivery: nothing is built, uploaded
+or downloaded differently because of it. What it buys you is a point to refer
+back to and a written account of what changed.
+
+When something user-visible changes, bump `VERSION` in `macos/build_app.sh`,
+give the `CHANGELOG.md` section that version and the date it landed, and once
+it is merged and CI is green on `main`, tag that commit:
 
 ```bash
-git tag -a v1.0.3 -m "What changed" && git push origin v1.0.3
+git checkout main && git pull
+git tag -a v1.0.4 -m "What changed" && git push origin v1.0.4
 ```
+
+Then draft a release from the tag on GitHub, with that changelog section as the
+notes. Open the app on a real Mac before tagging: a tag says "this one is
+good", and CI can build the bundle but cannot double-click it.
+
+`scripts/doc2gfm.py` carries its own `VERSION`. That is the converter's, not
+the app's — it is written into the front matter of every file it produces, so
+it moves when the converter's output changes, not when the app is released.
 
 ## Every so often
 
