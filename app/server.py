@@ -23,6 +23,7 @@ import platform
 import re
 import secrets
 import shutil
+import socketserver
 import subprocess
 import sys
 import tarfile
@@ -143,6 +144,9 @@ def private_dir(path: Path) -> Path:
     try:
         path.chmod(0o700)
     except OSError:
+        # A filesystem that does not do Unix permissions, or a folder owned by
+        # somebody else. Neither is worth refusing to start over: the token
+        # file below is created with its own permissions regardless.
         pass
     return path
 
@@ -651,6 +655,23 @@ def read_report() -> dict:
 # HTTP plumbing
 # --------------------------------------------------------------------------
 
+class Server(ThreadingHTTPServer):
+    """A loopback server that does not go looking for itself in DNS.
+
+    HTTPServer.server_bind calls socket.getfqdn() on the address it just bound,
+    which is a reverse DNS lookup of 127.0.0.1. On a machine whose resolver is
+    slow or unreachable that blocks for half a minute or more, before this
+    program has printed a word or written its instance file: from the outside,
+    clicking the icon does nothing at all. The name it looks up is only used to
+    fill in headers this server does not send.
+    """
+
+    def server_bind(self) -> None:
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "127.0.0.1"
+        self.server_port = self.server_address[1]
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "doc2gfm-ui"
 
@@ -812,7 +833,7 @@ def serve() -> int:
     if not CONVERTER.exists():
         print(f"Converter not found at {CONVERTER}", file=sys.stderr)
         return 2
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = Server(("127.0.0.1", 0), Handler)
     port = server.server_address[1]
     try:
         private_dir(SUPPORT)
@@ -822,6 +843,9 @@ def serve() -> int:
         with os.fdopen(handle, "w", encoding="utf-8") as out:
             out.write(json.dumps({"port": port, "token": TOKEN}))
     except OSError:
+        # Without this file a second launch cannot find this server and will
+        # start another one. That is worse than one server, and better than
+        # refusing to convert anything at all, so it is not fatal.
         pass
     print(f"Document to Markdown is running at http://127.0.0.1:{port}/")
     print("Close the page and quit from there, or press Ctrl+C here.")

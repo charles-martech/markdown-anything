@@ -142,6 +142,8 @@ anything that looks wrong with it.
 close its tab, and clicking the icon reopens that same page. If nothing opens
 at all, the server has stopped: open the app again, and if it still does
 nothing, look at `~/Library/Application Support/Document to Markdown/log.txt`.
+(Before version 1.0.3 this could also be the app waiting on a name server it
+could not reach. It no longer asks one anything.)
 
 **It says a tool is missing that you know you installed.** An app opened from
 Finder does not see the same `PATH` as your Terminal, so the app looks in the
