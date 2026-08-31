@@ -3,13 +3,13 @@
 #
 # From a copy of this repository:   ./install.sh
 # From anywhere, in one line:
-#   curl -fsSL https://raw.githubusercontent.com/carlos-vazquez-27/markdown-anything/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/charles-martech/markdown-anything/main/install.sh | bash
 #
 # It copies the app into /Applications, adds a Desktop shortcut, and opens it.
 # It never asks for an administrator password and installs nothing system-wide.
 set -euo pipefail
 
-REPO_URL="https://github.com/carlos-vazquez-27/markdown-anything"
+REPO_URL="https://github.com/charles-martech/markdown-anything"
 say() { printf '%s\n' "$1"; }
 
 if [ "$(uname -s)" != "Darwin" ]; then

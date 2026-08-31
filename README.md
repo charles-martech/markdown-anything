@@ -21,7 +21,7 @@ It runs entirely on your computer. Nothing is uploaded anywhere.
 Paste this into Terminal once, press return:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/carlos-vazquez-27/markdown-anything/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/charles-martech/markdown-anything/main/install.sh | bash
 ```
 
 That puts **Document to Markdown** in your Applications and on your Desktop, and
