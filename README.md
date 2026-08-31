@@ -27,8 +27,9 @@ Paste this into Terminal once, press return:
 curl -fsSL https://raw.githubusercontent.com/charles-martech/markdown-anything/main/install.sh | bash
 ```
 
-That puts **Document to Markdown** in your Applications and on your Desktop, and
-opens it. From then on it is a normal app: double-click the icon.
+That installs the newest release, puts **Document to Markdown** in your
+Applications and on your Desktop, and opens it. From then on it is a normal
+app: double-click the icon.
 
 The first time you open it, it offers to set itself up. Click the button and it
 downloads what it needs into its own folder. No administrator password, no
@@ -39,6 +40,29 @@ The install line above runs a script from this repository on your computer,
 which is a thing worth being careful about in general. To read it before you
 run it, [SECURITY.md](SECURITY.md#the-install-line) has the three commands that
 download it, show it to you, and then run it.
+
+## Keeping it up to date
+
+The app can update itself. When a newer release exists it shows you what
+changed and offers to install it; quit, open it again, and you are on the new
+version.
+
+**You decide when it looks.** The first time you open it, it asks — plainly,
+once — which you would rather have:
+
+- **Check automatically.** Once a day it asks GitHub whether a newer version
+  exists. Fixes, including security ones, reach you without you thinking about
+  it. The cost is one request a day that tells GitHub your computer's address.
+- **Only when I ask.** A **Check for updates** button at the bottom of the page,
+  and otherwise total silence. Nothing is ever sent unless you press it. The
+  cost is that a fix waits until you go looking for it.
+
+Neither is preselected, and you can change your mind at any time with the
+checkbox next to that button. Your documents are not involved either way.
+
+If an update ever fails, nothing changes: the copy you have keeps working,
+because a downloaded version has to start successfully on your Mac before it is
+allowed to replace one that already does.
 
 ## Using it
 
@@ -123,11 +147,22 @@ right flags. Copy that folder to `~/.claude/skills/` to have it everywhere.
 
 ## Your files stay yours
 
-Nothing is uploaded, there is no account, and there is no telemetry. The
-converter never opens a network connection. The app reaches the network exactly
-twice, both times because you clicked "set up": to fetch Pandoc from its
-official GitHub release, and the PDF and spreadsheet readers from PyPI. Both
-land in the app's own folder and nowhere else on your Mac.
+Your documents are read on your computer, converted on your computer, and
+written on your computer. No file, and nothing out of a file — not a name, not
+a word of the contents — is ever sent anywhere. There is no account, no server
+of ours, and no telemetry. The converter itself never opens a network
+connection at all.
+
+The app reaches the network in two situations, and nothing else:
+
+- **Setting up**, when you click the button: it fetches Pandoc from its official
+  GitHub release and the PDF and spreadsheet readers from PyPI, into the app's
+  own folder and nowhere else on your Mac.
+- **Looking for a newer version**: either once a day or only when you press the
+  button, whichever you chose the first time you opened it.
+
+Both send your computer's address, because every request on the internet does,
+and nothing else besides.
 
 The interface is a page served by a small server on your own machine. It is
 bound to `127.0.0.1` so nothing on your network can reach it, every request
@@ -156,6 +191,11 @@ inherits your shell environment.
 
 **Stopping it completely.** Use the "Quit the app" button at the bottom of the
 page. It also stops itself after thirty idle minutes.
+
+**An update went wrong.** Delete the folder
+`~/Library/Application Support/Document to Markdown/current` and open the app
+again. That puts back the version that came with the app. Nothing else is
+affected, and your converted files are somewhere else entirely.
 
 **Removing it.** Delete the app from Applications, the Desktop shortcut, and
 `~/Library/Application Support/Document to Markdown`. Nothing else was touched.
