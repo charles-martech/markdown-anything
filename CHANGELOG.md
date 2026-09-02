@@ -3,6 +3,52 @@
 Newest first. Dates are when the change landed on `main`, which is also when
 it reached anyone who runs the install line.
 
+## 1.2.1 — 2026-09-02
+
+### Changed
+
+- **The keyboard now shows where it is.** Nothing styled `:focus`, so on
+  controls carrying their own borders the browser's ring was easy to lose.
+  Links, buttons, checkboxes, text fields and the options summary all draw the
+  same accent outline when reached by keyboard. Buttons also press in on click,
+  and that and the progress bar hold still under `prefers-reduced-motion`.
+- **The footer is a landmark again.** It sat inside `<main>`, where a screen
+  reader does not expose it as one, although it holds controls for the app
+  rather than anything `<main>` describes. It is now a sibling of `<main>` and
+  keeps its width and centring from the stylesheet rather than inline styles.
+
+### Fixed
+
+- **A PDF could come out with most of its text missing.** How much text
+  pymupdf4llm finds inside vector art depends on its version, and an older one
+  drops it silently: a page laid out as a drawn table arrives nearly empty, and
+  nothing in the output says so. On one 11-page document an older reader
+  produced 3.5 KB where `pdftotext` produced 17.7 KB. Where `pdftotext` is
+  available its reading is now compared against pymupdf4llm's, and the fuller
+  one is used, with a note in the report saying what each found. Diagrams are
+  still saved either way.
+- **A page could carry the same picture twice.** A page drawn entirely as
+  vector art has no text for the picture to stand beside, and the picture was
+  both substituted and appended; a page holding two scraped-text blocks had the
+  same page picture put in place of each. A page now carries exactly one
+  picture, and a second scraped block is left alone rather than deleted.
+- **Every page of a document could be saved as a picture.** How finely PyMuPDF
+  splits a drawing into shapes varies by version, and on some of them a page of
+  prose over a ruled table counts as a diagram. When more than three quarters
+  of a document's pages qualify, the measure is no longer telling them apart,
+  and none are saved rather than all of them.
+
+- **An updated app went on behaving like the old one, without saying so.** The
+  update replaces the app's files under a server that is already running, and
+  tells the person once, in the update log, to quit and open it again. The
+  converter is started from those files by path, so it is the new one straight
+  away, while the app around it keeps the old behaviour: a conversion run in
+  between writes `_conversion-report.md` and `_conversion-manifest.json` into
+  the converted folder, as 1.1.1 did, and offers none of what 1.2.0 added. The
+  page now compares the version it is running against the version installed on
+  disk and, when they differ, carries a notice saying to quit and open the app
+  again and that conversions behave like the old version until then.
+
 ## 1.2.0 — 2026-09-02
 
 ### Added
