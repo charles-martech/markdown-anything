@@ -18,69 +18,58 @@ it reached anyone who runs the install line.
 
 ### Changed
 
-- **A diagram picture now leads the page it came from rather than trailing it.**
-  Where the reader scrapes the diagram's own text the picture still replaces it,
-  which is where the diagram actually sits. Where it does not, which is every
-  page read by `pdftotext`, the picture used to follow the page's text — and a
-  page's last line is usually the heading the next section opens with, so the
-  picture read as illustrating that rather than the page it was taken from.
+- **A diagram picture now sits above the section it illustrates.** It used to
+  come after the page it was taken from, and since a page often ends with the
+  next section's heading, the picture looked as though it belonged to that one.
 
 ## 1.2.2 — 2026-09-02
 
 ### Fixed
 
-- **Diagrams were never saved on an older PDF reader.** A Mac on the system
-  Python 3.9 can install no newer than pymupdf 1.26, and that version returns
-  the outline of every glyph from `get_drawings`, so a page of prose arrived as
-  several hundred letter-sized strokes and counted as a diagram. Every page in
-  a document qualified, the share cap added in 1.2.1 then correctly refused to
-  save a picture of all of them, and the result was no diagrams at all. A shape
-  must now be at least 20pt on both sides to count, which a diagram's node is
-  and a letter is not. On the reported document both pymupdf 1.26.5 and 1.28.2
-  now pick out the same three pages.
+- **Diagrams were never saved on a Mac with the older system Python.** The PDF
+  reader available there treats the outline of every letter as something drawn,
+  so every page looked like a diagram; rather than save a picture of all of
+  them, the app saved none. It now goes by how large the drawn shapes are,
+  which separates a diagram's boxes from a page of text on that reader and on
+  the current one alike. The same document now yields the same three pages
+  either way.
 
 - **The report told people to install a reader they already had.** When
   pymupdf4llm read a PDF but lost text, and the fuller `pdftotext` reading was
-  used instead, the run was then treated as though pymupdf4llm had been missing
-  all along and the report ended with "install pymupdf4llm" — directly
-  contradicting the line above it, which had just said what pymupdf4llm read.
-  That advice now appears only when pymupdf4llm really is absent, and mentions
-  diagram pictures only when pictures were asked for.
+  used instead, the report still ended by asking for it, contradicting the line
+  above that had just said what it read. That advice now appears only when the
+  reader really is missing, and mentions diagram pictures only when pictures
+  were asked for.
 
 ## 1.2.1 — 2026-09-02
 
 ### Changed
 
-- **The keyboard now shows where it is.** Nothing styled `:focus`, so on
-  controls carrying their own borders the browser's ring was easy to lose.
-  Links, buttons, checkboxes, text fields and the options summary all draw the
-  same accent outline when reached by keyboard. Buttons also press in on click,
-  and that and the progress bar hold still under `prefers-reduced-motion`.
-- **The footer is a landmark again.** It sat inside `<main>`, where a screen
-  reader does not expose it as one, although it holds controls for the app
-  rather than anything `<main>` describes. It is now a sibling of `<main>` and
-  keeps its width and centring from the stylesheet rather than inline styles.
+- **The keyboard now shows where it is.** Moving through the page with Tab
+  draws a clear outline around whatever is selected, on every link, button,
+  checkbox and box you can type in; before, it was easy to lose. Buttons press
+  in when clicked, and nothing moves if the system's reduce-motion setting is
+  on.
+- **A screen reader can find the footer.** The controls at the bottom of the
+  page — Quit the app, Check for updates — are now announced as the page's
+  footer, which they were not before.
 
 ### Fixed
 
 - **A PDF could come out with most of its text missing.** How much text
-  pymupdf4llm finds inside vector art depends on its version, and an older one
-  drops it silently: a page laid out as a drawn table arrives nearly empty, and
-  nothing in the output says so. On one 11-page document an older reader
-  produced 3.5 KB where `pdftotext` produced 17.7 KB. Where `pdftotext` is
-  available its reading is now compared against pymupdf4llm's, and the fuller
-  one is used, with a note in the report saying what each found. Diagrams are
-  still saved either way.
+  a PDF reader finds inside drawn artwork depends on its version, and older
+  ones drop it without saying so: a page laid out as a drawn table arrives
+  nearly empty. On one 11-page document an older reader produced 3.5 KB where
+  the fallback produced 17.7 KB. The two readings are now compared and the
+  fuller one used, with a note in the report saying what each found. Diagrams
+  are still saved either way.
 - **A page could carry the same picture twice.** A page drawn entirely as
-  vector art has no text for the picture to stand beside, and the picture was
-  both substituted and appended; a page holding two scraped-text blocks had the
-  same page picture put in place of each. A page now carries exactly one
-  picture, and a second scraped block is left alone rather than deleted.
-- **Every page of a document could be saved as a picture.** How finely PyMuPDF
-  splits a drawing into shapes varies by version, and on some of them a page of
-  prose over a ruled table counts as a diagram. When more than three quarters
-  of a document's pages qualify, the measure is no longer telling them apart,
-  and none are saved rather than all of them.
+  artwork has no text for the picture to sit beside, and it was added twice
+  over. Each page now carries exactly one.
+- **Every page of a document could be saved as a picture.** On some PDF
+  readers a page of prose over a ruled table looked like a diagram. When nearly
+  every page in a document qualifies, the app now saves none rather than a
+  picture of each.
 
 - **An updated app went on behaving like the old one, without saying so.** The
   update replaces the app's files under a server that is already running, and
