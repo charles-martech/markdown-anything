@@ -3,6 +3,17 @@
 Newest first. Dates are when the change landed on `main`, which is also when
 it reached anyone who runs the install line.
 
+## 1.2.3 — 2026-09-02
+
+### Changed
+
+- **A diagram picture now leads the page it came from rather than trailing it.**
+  Where the reader scrapes the diagram's own text the picture still replaces it,
+  which is where the diagram actually sits. Where it does not, which is every
+  page read by `pdftotext`, the picture used to follow the page's text — and a
+  page's last line is usually the heading the next section opens with, so the
+  picture read as illustrating that rather than the page it was taken from.
+
 ## 1.2.2 — 2026-09-02
 
 ### Fixed

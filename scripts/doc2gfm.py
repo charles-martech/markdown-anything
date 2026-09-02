@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 
 IS_MAC = sys.platform == "darwin"
 IS_WINDOWS = sys.platform == "win32"
@@ -904,10 +904,13 @@ def assemble_pdf(pages: list[str], pictures: dict[int, str],
             page, replaced = PICTURE_TEXT_RE.subn(link, page, count=1)
             page = page.strip()
             if not replaced:
-                # Nothing to stand in for, so the picture follows the page. A
-                # page drawn entirely as vector art has no text at all, and
-                # must still end up with exactly one picture.
-                page = f"{page}\n\n{link}" if page else link
+                # No scraped text to stand in for, which is every page under
+                # pdftotext. The picture leads the page instead of trailing it:
+                # a page's last line is usually the heading the next section
+                # opens with, so a trailing picture reads as illustrating that
+                # rather than the page it came from. A page drawn entirely as
+                # vector art has no text at all and is the picture alone.
+                page = f"{link}\n\n{page}" if page else link
             chunks.append(page)
         elif page:
             chunks.append(page)
