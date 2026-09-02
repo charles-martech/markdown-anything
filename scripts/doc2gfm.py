@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 IS_MAC = sys.platform == "darwin"
 IS_WINDOWS = sys.platform == "win32"
@@ -637,23 +637,36 @@ def convert_sheet(args: argparse.Namespace, src: Path, job: Job,
 
 # --- PDF ------------------------------------------------------------------
 
-def _pdf_via_pymupdf(src: Path) -> str | None:
+# A page is treated as carrying a diagram when it holds this many separate
+# vector shapes covering this much of the page. Flowcharts, org charts and
+# architecture diagrams are drawn as dozens of boxes and arrows; a page of
+# prose with a table under it has only a handful of shapes once the hairline
+# rules are discounted, so the two separate cleanly.
+DIAGRAM_MIN_SHAPES = 12
+DIAGRAM_MIN_PAGE_FRACTION = 0.15
+
+
+def _pdf_via_pymupdf(src: Path) -> list[str] | None:
     try:
         import pymupdf4llm  # type: ignore
     except ImportError:
         return None
-    return pymupdf4llm.to_markdown(str(src))
+    pages = pymupdf4llm.to_markdown(str(src), page_chunks=True)
+    return [str(page.get("text", "")) for page in pages]
 
 
-def _pdf_via_markitdown(src: Path) -> str | None:
+def _pdf_via_markitdown(src: Path) -> list[str] | None:
     try:
         from markitdown import MarkItDown  # type: ignore
     except ImportError:
         return None
-    return MarkItDown().convert(str(src)).text_content
+    # MarkItDown gives back the whole document at once, with no page
+    # boundaries, so it counts as a single page.
+    return [MarkItDown().convert(str(src)).text_content]
 
 
-def _pdf_via_pdftotext(args: argparse.Namespace, src: Path, job: Job) -> str:
+def _pdf_via_pdftotext(args: argparse.Namespace, src: Path,
+                       job: Job) -> list[str]:
     pdftotext = find_tool("pdftotext")
     if pdftotext is None:
         raise ConversionError(
@@ -662,63 +675,176 @@ def _pdf_via_pdftotext(args: argparse.Namespace, src: Path, job: Job) -> str:
     proc = run([pdftotext, "-layout", "-enc", "UTF-8", str(src), "-"],
                timeout=args.timeout)
     text = proc.stdout.decode("utf-8", "replace")
-    pages = text.split("\f")
-    chunks: list[str] = []
-    for number, page in enumerate(pages, start=1):
+    pages: list[str] = []
+    for page in text.split("\f"):
         page = page.rstrip()
         if not page.strip():
+            pages.append("")
             continue
-        if args.pdf_page_marks:
-            chunks.append(f"<!-- page {number} -->\n")
         paragraphs = [
             re.sub(r"[ \t]*\n[ \t]*", " ", block).strip()
             for block in re.split(r"\n[ \t]*\n", page)
         ]
-        chunks.append("\n\n".join(p for p in paragraphs if p))
-    return "\n\n".join(chunks).strip() + "\n"
+        pages.append("\n\n".join(p for p in paragraphs if p))
+    return pages
+
+
+def diagram_pages(src: Path) -> dict[int, "object"]:
+    """Page number (from 1) -> page, for pages that look like a diagram.
+
+    Charts and flowcharts are vector art, not embedded images: nothing is
+    there to extract, and the text inside them arrives as scrambled fragments
+    because it follows the drawing order rather than any reading order. The
+    only faithful record of such a page is a picture of the page.
+    """
+    try:
+        import pymupdf  # type: ignore
+    except ImportError:
+        return {}
+    try:
+        doc = pymupdf.open(str(src))
+    except Exception:  # noqa: BLE001 - a PDF we cannot open has no diagrams
+        return {}
+    found: dict[int, object] = {}
+    for number, page in enumerate(doc, start=1):
+        try:
+            page_area = abs(page.rect)
+            if not page_area:
+                continue
+            boxes = []
+            for drawing in page.get_drawings():
+                rect = drawing["rect"]
+                # Hairlines are rules and underlines; a shape covering most of
+                # the page is the background panel, not part of a diagram.
+                if rect.width < 3 or rect.height < 3:
+                    continue
+                if abs(rect) > 0.6 * page_area:
+                    continue
+                boxes.append(rect)
+            if len(boxes) < DIAGRAM_MIN_SHAPES:
+                continue
+            covered = boxes[0]
+            for box in boxes[1:]:
+                covered |= box
+            if abs(covered) / page_area >= DIAGRAM_MIN_PAGE_FRACTION:
+                found[number] = page
+        except Exception:  # noqa: BLE001,S112 - one unreadable page, not a failure
+            continue
+    return found
+
+
+def save_diagram_pictures(src: Path, media_dir: Path,
+                          dpi: int) -> dict[int, str]:
+    """Write a picture of each diagram page. Page number (from 1) -> filename."""
+    pages = diagram_pages(src)
+    if not pages:
+        return {}
+    saved: dict[int, str] = {}
+    media_dir.mkdir(parents=True, exist_ok=True)
+    for number, page in sorted(pages.items()):
+        name = f"page-{number:03d}.png"
+        try:
+            page.get_pixmap(dpi=dpi).save(str(media_dir / name))
+        except Exception:  # noqa: BLE001,S112 - a page that will not render is skipped
+            continue
+        saved[number] = name
+    return saved
 
 
 def convert_pdf(args: argparse.Namespace, src: Path, job: Job,
-                workdir: Path) -> str:
+                workdir: Path, media_dir: Path | None) -> str:
     order = (["pdftotext", "pymupdf", "markitdown"]
              if args.pdf_engine == "pdftotext" else
              ["pymupdf", "markitdown", "pdftotext"])
     if args.pdf_engine not in ("auto", "pdftotext"):
         order = [args.pdf_engine]
-    body = ""
+    pages: list[str] = []
+    used = ""
     errors: list[str] = []
     for engine in order:
         try:
             if engine == "pymupdf":
-                body = _pdf_via_pymupdf(src) or ""
+                pages = _pdf_via_pymupdf(src) or []
             elif engine == "markitdown":
-                body = _pdf_via_markitdown(src) or ""
+                pages = _pdf_via_markitdown(src) or []
             else:
-                body = _pdf_via_pdftotext(args, src, job)
+                pages = _pdf_via_pdftotext(args, src, job)
         except ConversionError as exc:
             errors.append(str(exc))
-            body = ""
+            pages = []
         except Exception as exc:  # noqa: BLE001 - one engine failing is not the file failing
             # PyMuPDF raises its own exceptions on an encrypted or damaged
             # PDF. The next engine may still read it, so try it before giving
             # up on the file.
             errors.append(f"{engine}: {type(exc).__name__}: {exc}")
-            body = ""
-        if body.strip():
+            pages = []
+        if any(page.strip() for page in pages):
+            used = engine
             job.warnings.append(f"pdf engine: {engine}")
             break
-    if not body.strip():
+    if not any(page.strip() for page in pages):
         if args.ocr and find_tool("ocrmypdf"):
             ocred = workdir / "ocr.pdf"
             run([find_tool("ocrmypdf"), "--force-ocr", "--quiet",
                  str(src), str(ocred)],
                 timeout=max(args.timeout, 1800))
             job.warnings.append("no embedded text; OCR applied")
-            return _pdf_via_pdftotext(args, ocred, job)
+            return assemble_pdf(_pdf_via_pdftotext(args, ocred, job),
+                                {}, "", args)
         hint = ("no extractable text (scanned PDF?) - re-run with --ocr and "
                 "ocrmypdf installed")
         raise ConversionError("; ".join(errors) or hint)
-    return body.strip() + "\n"
+
+    pictures: dict[int, str] = {}
+    if media_dir is not None:
+        pictures = save_diagram_pictures(src, media_dir, args.pdf_picture_dpi)
+        if pictures:
+            job.warnings.append(
+                f"{len(pictures)} page(s) with diagrams saved as pictures in "
+                f"{media_dir.name}/")
+    if used == "pdftotext" and not pictures:
+        job.warnings.append(
+            "install pymupdf4llm for better PDF text and for diagrams saved "
+            "as pictures")
+    prefix = f"{media_dir.name}/" if media_dir is not None else ""
+    return assemble_pdf(pages, pictures, prefix, args)
+
+
+# pymupdf4llm wraps the text it scrapes out of vector art in these markers.
+# The text inside follows the drawing order, not any reading order, so it
+# arrives as scrambled fragments, sometimes with labels reversed.
+PICTURE_TEXT_RE = re.compile(
+    r"<!-- Start of picture text -->.*?<!-- End of picture text -->",
+    re.DOTALL)
+
+
+def assemble_pdf(pages: list[str], pictures: dict[int, str],
+                 prefix: str, args: argparse.Namespace) -> str:
+    """One Markdown document from per-page text, with diagram pictures in place."""
+    chunks: list[str] = []
+    for number, page in enumerate(pages, start=1):
+        page = page.strip()
+        picture = pictures.get(number)
+        if not page and not picture:
+            continue
+        if args.pdf_page_marks:
+            chunks.append(f"<!-- page {number} -->")
+        if picture:
+            # Say which page it is, so a reader can check it against the
+            # original.
+            link = (f"![Diagram on page {number} of the original PDF]"
+                    f"({prefix}{picture})")
+            # Where the engine scraped the diagram's own text, the picture
+            # belongs in its place: the picture is readable and that text is
+            # not. Otherwise the picture goes after the page it came from.
+            page, replaced = PICTURE_TEXT_RE.subn(link, page)
+            page = page.strip()
+            chunks.append(page if page else link)
+            if not replaced:
+                chunks.append(link)
+        elif page:
+            chunks.append(page)
+    return "\n\n".join(chunks).strip() + "\n"
 
 
 # --- Bibliographies -------------------------------------------------------
@@ -856,7 +982,7 @@ def convert_body(job: Job, args: argparse.Namespace,
         elif job.route == "biblio":
             body = convert_biblio(args, src, job.arg, job)
         elif job.route == "pdf":
-            body = convert_pdf(args, src, job, workdir)
+            body = convert_pdf(args, src, job, workdir, media_dir)
         elif job.route == "ansi":
             body = convert_ansi(src, job)
         elif job.route == "text":
@@ -986,6 +1112,15 @@ def plan(inputs: list[Path], args: argparse.Namespace) -> tuple[list[Job], list[
 # --------------------------------------------------------------------------
 
 def write_report(jobs: list[Job], args: argparse.Namespace) -> None:
+    """Write the run's report and manifest, unless --no-sidecars said not to.
+
+    The app passes paths of its own so that these two files stay out of the
+    folder the person chose: they are a record of the run, not part of what
+    was converted, and having to find and delete them after every conversion
+    is a chore the app should not create.
+    """
+    if not args.sidecars:
+        return
     by = {k: [j for j in jobs if j.status == k]
           for k in ("converted", "unchanged", "skipped", "failed")}
     lines = [
@@ -1087,6 +1222,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                                             "pdftotext"), default="auto")
     p.add_argument("--pdf-page-marks", action="store_true",
                    help="keep <!-- page N --> comments in PDF output")
+    p.add_argument("--pdf-picture-dpi", type=int, default=150,
+                   help="resolution of saved diagram pages "
+                        "(default: %(default)s)")
     p.add_argument("--ocr", action="store_true",
                    help="run ocrmypdf on PDFs with no extractable text")
     p.add_argument("--no-em-dash", action="store_true",
@@ -1100,6 +1238,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="report path (default: OUT/_conversion-report.md)")
     p.add_argument("--manifest", type=Path,
                    help="manifest path (default: OUT/_conversion-manifest.json)")
+    p.add_argument("--no-sidecars", dest="sidecars", action="store_false",
+                   help="do not write the report and manifest at all")
     p.add_argument("-q", "--quiet", action="store_true")
     p.add_argument("--version", action="version", version=f"doc2gfm {VERSION}")
     args = p.parse_args(argv)
@@ -1224,8 +1364,9 @@ def main(argv: list[str]) -> int:
               f"{len([j for j in all_jobs if j.status == 'unchanged'])} unchanged, "
               f"{len([j for j in all_jobs if j.status == 'skipped'])} skipped, "
               f"{len(failed)} failed")
-        print(f"report:   {args.report}")
-        print(f"manifest: {args.manifest}")
+        if args.sidecars:
+            print(f"report:   {args.report}")
+            print(f"manifest: {args.manifest}")
     return 1 if failed else 0
 
 
