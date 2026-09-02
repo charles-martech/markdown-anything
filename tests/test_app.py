@@ -470,6 +470,38 @@ class ConverterTest(unittest.TestCase):
         self.assertEqual(doc2gfm.diagram_pages(Path("no-such-file.pdf")), {})
 
 
+class StaleProcessTest(unittest.TestCase):
+    """An update replaces the bundle under a server that is already running."""
+
+    def test_matching_versions_say_nothing(self) -> None:
+        self.assertEqual(server.installed_version(), server.VERSION)
+        self.assertEqual(server.settings_for_page()["installedVersion"],
+                         server.VERSION)
+
+    def test_a_newer_bundle_on_disk_is_reported(self) -> None:
+        stamp = server.ROOT / "VERSION"
+        original = stamp.read_text(encoding="utf-8")
+        try:
+            stamp.write_text("99.0.0\n", encoding="utf-8")
+            self.assertEqual(server.installed_version(), "99.0.0")
+            payload = server.settings_for_page()
+            self.assertEqual(payload["installedVersion"], "99.0.0")
+            # The running version is the one read at import, not re-read here.
+            self.assertEqual(payload["version"], server.VERSION)
+            self.assertNotEqual(payload["installedVersion"], payload["version"])
+        finally:
+            stamp.write_text(original, encoding="utf-8")
+
+    def test_an_unreadable_stamp_reports_the_running_version(self) -> None:
+        stamp = server.ROOT / "VERSION"
+        original = stamp.read_text(encoding="utf-8")
+        try:
+            stamp.unlink()
+            self.assertEqual(server.installed_version(), server.VERSION)
+        finally:
+            stamp.write_text(original, encoding="utf-8")
+
+
 class SidecarTest(unittest.TestCase):
     """The report and manifest are the app's record, not the person's files."""
 

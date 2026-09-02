@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 
 IS_MAC = sys.platform == "darwin"
 IS_WINDOWS = sys.platform == "win32"

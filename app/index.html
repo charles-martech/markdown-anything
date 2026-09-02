@@ -117,6 +117,8 @@
     <div class="log hide" id="setup-log" style="margin-top:14px"></div>
   </section>
 
+  <div id="stale-box" class="banner hide"></div>
+
   <div id="engines"></div>
 
   <section class="card">
@@ -499,6 +501,18 @@ let updateCursor = 0;
 
 api("/api/settings").then(settings => {
   $("version-line").textContent = "Version " + settings.version;
+  // An update swaps the app's files under a server that is already running.
+  // The converter it starts is the new one straight away, so until the app is
+  // opened again the two halves disagree and conversions behave like neither
+  // version. Say so where it cannot be missed.
+  if (settings.installedVersion && settings.installedVersion !== settings.version) {
+    const box = $("stale-box");
+    box.innerHTML = "<b>Quit the app and open it again to finish updating.</b> " +
+      "Version " + escapeHtml(settings.installedVersion) + " is installed, but " +
+      "this app is still running version " + escapeHtml(settings.version) +
+      ". Until you do, conversions behave like the old version.";
+    box.classList.remove("hide");
+  }
   if (settings.fileManager) FILE_MANAGER.name = settings.fileManager;
   if (settings.examplePath) {
     $("source-input").placeholder = settings.examplePath + ", or a folder";
