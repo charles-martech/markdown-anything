@@ -72,6 +72,12 @@ def default_support_dir() -> Path:
 # environment rather than a module global.
 SUPPORT = Path(os.environ.get("DOC2MD_HOME") or default_support_dir())
 BIN_DIR = SUPPORT / "bin"
+# The report and manifest for the most recent run. They belong to the app,
+# not to the person's documents, so they live here instead of in the folder
+# that was converted: nothing to find and delete after every conversion.
+RUN_DIR = SUPPORT / "last-run"
+RUN_REPORT = RUN_DIR / "report.md"
+RUN_MANIFEST = RUN_DIR / "manifest.json"
 PYLIB_DIR = SUPPORT / "python"
 # An app launched from Finder inherits a bare PATH (/usr/bin:/bin:/usr/sbin:
 # /sbin), not the PATH from a login shell, so tools installed by Homebrew are
@@ -467,14 +473,18 @@ def engine_status() -> list[dict]:
     `install` false means the app cannot fetch it silently (LibreOffice is a
     large signed installer), so the UI sends the person to a download page.
     """
-    pdf_ready = python_module_available("pymupdf4llm") or bool(tool_path("pdftotext"))
+    # pdftotext alone reads a PDF, but only pymupdf4llm gets the headings and
+    # tables right and lets diagrams be saved as pictures, and it is the one
+    # the app can fetch by itself. Someone with pdftotext only still converts
+    # PDFs; the offer to add this is worth making to them anyway.
+    pdf_ready = python_module_available("pymupdf4llm")
     return [
         {"key": "pandoc", "name": "Pandoc", "required": True,
          "ok": bool(tool_path("pandoc")), "install": True,
          "purpose": "Word documents, web pages, ebooks, wikis and most other formats"},
         {"key": "pdf", "name": "PDF reader", "required": False,
          "ok": pdf_ready, "install": True,
-         "purpose": "PDF files"},
+         "purpose": "PDF diagrams, and better headings and tables from PDFs"},
         {"key": "excel", "name": "Spreadsheet reader", "required": False,
          "ok": python_module_available("openpyxl"), "install": True,
          "purpose": "Excel sheet names and headers"},
@@ -1026,7 +1036,8 @@ def start_conversion(options: dict) -> dict:
 
     # Options first and sources after "--", so a file whose name starts with
     # a dash is a file and never a flag.
-    command = [sys.executable, "-u", str(CONVERTER), "-o", str(output_path)]
+    command = [sys.executable, "-u", str(CONVERTER), "-o", str(output_path),
+               "--report", str(RUN_REPORT), "--manifest", str(RUN_MANIFEST)]
     if options.get("flat"):
         command.append("--flat")
     if options.get("force"):
@@ -1047,6 +1058,10 @@ def start_conversion(options: dict) -> dict:
             command += ["--include", cleaned]
     command += ["--", *[str(source) for source in sources]]
 
+    for stale in (RUN_REPORT, RUN_MANIFEST):
+        # A run that dies before the converter writes anything must not
+        # leave the previous run's report on screen.
+        stale.unlink(missing_ok=True)
     RUN.reset(str(output_path))
     thread = threading.Thread(target=_run, args=(command,), daemon=True)
     thread.start()
@@ -1132,25 +1147,20 @@ def describe_sources(paths: list[str]) -> dict:
 
 
 def read_report() -> dict:
-    with RUN.lock:
-        output = RUN.output_dir
-    report = Path(output) / "_conversion-report.md"
-    if not report.exists():
+    if not RUN_REPORT.exists():
         return {"report": ""}
-    return {"report": report.read_text(encoding="utf-8")[:200_000]}
+    return {"report": RUN_REPORT.read_text(encoding="utf-8")[:200_000]}
 
 
-def manifest_outputs(output_dir: str) -> list[dict]:
+def manifest_outputs(manifest: Path | None = None) -> list[dict]:
     """The Markdown files the last run produced, from the converter's manifest.
 
     The page uses this to offer the one file that was just converted rather
     than the folder around it. Anything odd in the file means an empty list,
     never an error: it is a convenience, not the result.
     """
-    if not output_dir:
-        return []
     try:
-        data = json.loads((Path(output_dir) / "_conversion-manifest.json")
+        data = json.loads((manifest or RUN_MANIFEST)
                           .read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
@@ -1167,7 +1177,7 @@ def manifest_outputs(output_dir: str) -> list[dict]:
 def conversion_status(cursor: int) -> dict:
     state = RUN.snapshot(cursor)
     if state["finished"]:
-        state["outputs"] = manifest_outputs(state["outputDir"])
+        state["outputs"] = manifest_outputs()
     return state
 
 

@@ -150,20 +150,39 @@
 
   <section class="card">
     <details>
-      <summary>Options (the defaults are fine)</summary>
+      <summary>Options</summary>
       <div style="margin-top:10px">
-        <label class="check"><input type="checkbox" id="opt-emdash">
-          <span><b>Replace em dashes with commas</b><i>For house styles that ban them.</i></span></label>
+        <p class="muted" style="margin:0 0 12px">Only one of these is on to
+          start with. Each says what it is for, so you can leave the rest
+          alone unless you need them.</p>
         <label class="check"><input type="checkbox" id="opt-media" checked>
-          <span><b>Save embedded images</b><i>Pictures inside documents are saved next to each Markdown file.</i></span></label>
-        <label class="check"><input type="checkbox" id="opt-flat">
-          <span><b>Put everything in one folder</b><i>Off by default, which keeps your original folder structure.</i></span></label>
+          <span><b>Save pictures and diagrams</b><i><b>On</b>, because
+            otherwise they are lost: pictures inside a document, and pages of
+            a PDF drawn as a chart or flowchart, are saved beside the Markdown
+            and linked from it. Turn it off for text only, and smaller
+            output.</i></span></label>
         <label class="check"><input type="checkbox" id="opt-force">
-          <span><b>Redo files converted before</b><i>Normally a file already converted is left alone, so re-runs are quick.</i></span></label>
+          <span><b>Redo files converted before</b><i><b>Off</b>, so running
+            again only converts what is new or has changed, which keeps
+            re-runs quick. Turn it on to rebuild everything from
+            scratch.</i></span></label>
+        <label class="check"><input type="checkbox" id="opt-flat">
+          <span><b>Put everything in one folder</b><i><b>Off</b>, so the
+            output mirrors the folders you started with and two files with
+            the same name in different folders stay apart. Turn it on for one
+            flat pile of Markdown.</i></span></label>
+        <label class="check"><input type="checkbox" id="opt-emdash">
+          <span><b>Replace em dashes with commas</b><i><b>Off</b>, because it
+            changes the words in the document. Turn it on only for a house
+            style that bans them.</i></span></label>
         <label class="check"><input type="checkbox" id="opt-ocr">
-          <span><b>Read scanned PDFs with OCR</b><i>Slow, and only works if OCR software is installed.</i></span></label>
+          <span><b>Read scanned PDFs with OCR</b><i><b>Off</b>, because it is
+            slow and needs OCR software installed. A PDF that comes out empty
+            is a scan: turn this on and convert it again.</i></span></label>
         <label class="check" style="display:block">
-          <span><b>Only these file types</b><i>Leave empty for everything. Example: pdf, docx</i></span>
+          <span><b>Only these file types</b><i><b>Empty</b>, which converts
+            every kind of document it recognises. Name a few to convert only
+            those. Example: pdf, docx</i></span>
           <input type="text" id="opt-only" placeholder="pdf, docx" style="margin-top:6px" spellcheck="false"></label>
       </div>
     </details>
