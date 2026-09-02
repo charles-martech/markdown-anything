@@ -96,10 +96,16 @@ Paths are relative to the repository root. Use absolute paths from elsewhere.
   the source path, its format and its SHA-256. (`--stdout` leaves the front
   matter out: you already know the source.)
 - `NAME.media/` beside a file whose source had embedded images, with the links
-  already pointing at it.
+  already pointing at it. For a PDF this also holds `page-NNN.png` for each page
+  carrying a diagram: flowcharts and charts are vector art whose labels come out
+  scrambled, so the page picture goes into the Markdown in place of them.
 - `_conversion-report.md`: counts, every output, and a table of skipped and
   failed files with the reason for each.
 - `_conversion-manifest.json`: the same thing machine-readable.
+
+Both of the last two go elsewhere with `--report` and `--manifest`, or are
+skipped entirely with `--no-sidecars`, so a folder of converted documents holds
+nothing but the documents.
 
 ## How it behaves
 
