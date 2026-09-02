@@ -276,6 +276,12 @@ delete `~/.local/share/document-to-markdown`,
 `~/.local/share/applications/document-to-markdown.desktop` and the copy on
 your Desktop. Nothing else was touched.
 
+## If it helped
+
+A star on GitHub is what makes a project like this findable by the next person
+searching for a way to read their PDFs as text, and it costs a click. Sharing
+the install line with someone who converts documents by hand does the rest.
+
 ## Contributing
 
 Bug reports about a format that converted badly are the most useful thing, and

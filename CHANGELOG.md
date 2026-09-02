@@ -5,6 +5,13 @@ it reached anyone who runs the install line.
 
 ## 1.1.1 — 2026-09-02
 
+### Added
+
+- A line at the bottom of the page to star the project on GitHub, share it
+  on X or LinkedIn, copy the link, or report a problem. They are plain links
+  that open in the browser only when clicked; the page loads nothing from
+  anywhere to show them.
+
 ### Fixed
 
 - **A page left open went dead without saying so.** The app stops itself
