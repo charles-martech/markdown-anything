@@ -3,6 +3,17 @@
 Newest first. Dates are when the change landed on `main`, which is also when
 it reached anyone who runs the install line.
 
+## 1.2.4 — 2026-09-02
+
+### Fixed
+
+- **The app offered a PDF reader that some Macs cannot install.** The reader
+  that keeps the text inside diagrams and tables needs Python 3.10, and a Mac
+  running the system Python 3.9 cannot have it, so both the conversion report
+  and the app's offer were pointing at something out of reach. The report now
+  says the Python version is the limit, and the offer promises only what
+  installing it would really win there: diagrams saved as pictures.
+
 ## 1.2.3 — 2026-09-02
 
 ### Changed
