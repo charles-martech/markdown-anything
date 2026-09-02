@@ -145,7 +145,7 @@ drawing order as scrambled fragments. A page holding at least
 twelve separate shapes, each at least 20pt on both sides, covering at least
 fifteen percent of the page is read as a diagram, and a picture of that page is saved into the same `.media` folder as
 embedded images and linked from the Markdown, in place of the scrambled text
-where the engine produced any. The size floor matters: older PyMuPDF returns the outline of every glyph, so
+where the engine produced any and at the head of the page where it did not. The size floor matters: older PyMuPDF returns the outline of every glyph, so
 without it a page of prose counts as hundreds of shapes. This needs pymupdf and
 is skipped under
 `--no-media`. When more than three quarters of a document's pages qualify the
