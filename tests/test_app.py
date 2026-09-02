@@ -489,6 +489,25 @@ class ConverterTest(unittest.TestCase):
         self.assertNotIn("first", out)
         self.assertIn("second", out)
 
+    def test_the_reader_advice_never_contradicts_the_fallback(self) -> None:
+        """After a fall back pymupdf4llm is installed, so do not ask for it."""
+        self.assertEqual(doc2gfm.engine_advice("pdftotext", True, True), "")
+        self.assertEqual(doc2gfm.engine_advice("pdftotext", True, False), "")
+
+    def test_the_reader_advice_appears_when_it_is_really_missing(self) -> None:
+        self.assertIn("better PDF text",
+                      doc2gfm.engine_advice("pdftotext", False, True))
+        self.assertIn("diagrams saved as pictures",
+                      doc2gfm.engine_advice("pdftotext", False, True))
+
+    def test_the_reader_advice_omits_pictures_nobody_asked_for(self) -> None:
+        advice = doc2gfm.engine_advice("pdftotext", False, False)
+        self.assertIn("better PDF text", advice)
+        self.assertNotIn("pictures", advice)
+
+    def test_no_advice_when_pymupdf4llm_read_the_file(self) -> None:
+        self.assertEqual(doc2gfm.engine_advice("pymupdf", False, True), "")
+
     def test_text_volume_counts_words_not_markup(self) -> None:
         self.assertEqual(doc2gfm.text_volume(["## ab |---| cd"]), 4)
         self.assertEqual(doc2gfm.text_volume([]), 0)
