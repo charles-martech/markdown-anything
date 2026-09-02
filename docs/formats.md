@@ -127,13 +127,12 @@ stable across runs.
 
 ## PDF
 
-`.pdf`, in engine order: pymupdf4llm (keeps headings and tables best), markitdown,
-then `pdftotext -layout`. Choose one explicitly with `--pdf-engine`. How much text pymupdf4llm finds inside vector art depends on
-its version, and older ones drop it silently, so on `auto` its reading is
-compared against `pdftotext`'s where that is installed and the fuller one wins,
-with both counts recorded in the report. Every pymupdf4llm that keeps that
-text needs Python 3.10, so on an older Python the report says so rather than
-suggesting an upgrade that cannot be installed.
+`.pdf`, in engine order: pymupdf4llm (keeps headings and tables best),
+markitdown, then `pdftotext -layout`. Choose one explicitly with
+`--pdf-engine`. On `auto`, whichever of them reads more of the document is the
+one used, and the report says which and by how much. On Python 3.9 the reader
+that keeps the text inside diagrams and tables cannot be installed at all, so
+`pdftotext` does the reading there.
 
 A PDF with no text layer fails with a note saying so. Re-run with `--ocr` and
 `ocrmypdf` installed to OCR it. Multi-column academic layouts interleave columns
@@ -141,17 +140,13 @@ under `pdftotext`; pymupdf4llm handles them better. `--pdf-page-marks` keeps
 `<!-- page N -->` comments, useful when the markdown has to be checked against
 the original.
 
-Diagrams — flowcharts, org charts, architecture drawings — are vector art, not
-embedded images, so there is nothing to extract and their labels come out in
-drawing order as scrambled fragments. A page holding at least
-twelve separate shapes, each at least 20pt on both sides, covering at least
-fifteen percent of the page is read as a diagram, and a picture of that page is saved into the same `.media` folder as
-embedded images and linked from the Markdown, in place of the scrambled text
-where the engine produced any and at the head of the page where it did not. The size floor matters: older PyMuPDF returns the outline of every glyph, so
-without it a page of prose counts as hundreds of shapes. This needs pymupdf and
-is skipped under
-`--no-media`. When more than three quarters of a document's pages qualify the
-measure is not telling pages apart, and none are saved. `--pdf-picture-dpi` sets the resolution, 150 by default.
+Diagrams — flowcharts, org charts, architecture drawings — are drawn rather than
+embedded as images, so their labels come out in drawing order as scrambled
+fragments. A page holding one is saved as a picture into the same `.media`
+folder embedded images use and linked from the Markdown: in place of the
+scrambled text where there is any, and at the head of the page where there is
+not. This needs pymupdf, and is skipped under `--no-media`.
+`--pdf-picture-dpi` sets the resolution, 150 by default.
 
 ## Lightweight markup formats
 
