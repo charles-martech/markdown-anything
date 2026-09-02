@@ -418,10 +418,19 @@ class ConverterTest(unittest.TestCase):
         self.assertIn("Before", out)
         self.assertIn("After", out)
 
-    def test_a_diagram_picture_follows_a_page_it_could_not_be_placed_in(self) -> None:
+    def test_a_diagram_picture_leads_a_page_it_could_not_be_placed_in(self) -> None:
+        """A page's last line is usually the next section's heading."""
         out = doc2gfm.assemble_pdf(["Just words"], {1: "page-001.png"},
                                    "d.media/", self._pdf_args())
-        self.assertLess(out.index("Just words"), out.index("page-001.png"))
+        self.assertLess(out.index("page-001.png"), out.index("Just words"))
+
+    def test_a_replaced_picture_stays_where_the_scraped_text_was(self) -> None:
+        page = ("before\n\n<!-- Start of picture text -->x"
+                "<!-- End of picture text -->\n\nafter")
+        out = doc2gfm.assemble_pdf([page], {1: "page-001.png"}, "d.media/",
+                                   self._pdf_args())
+        self.assertLess(out.index("before"), out.index("page-001.png"))
+        self.assertLess(out.index("page-001.png"), out.index("after"))
 
     def test_pages_without_a_diagram_are_left_alone(self) -> None:
         out = doc2gfm.assemble_pdf(["one", "", "two"], {}, "", self._pdf_args())
