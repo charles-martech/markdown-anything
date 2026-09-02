@@ -252,7 +252,13 @@ elsewhere `python3` (or `python`) followed by the path of `app/server.py`
 inside the app's folder.
 
 **Stopping it completely.** Use the "Quit the app" button at the bottom of the
-page. It also stops itself after thirty idle minutes.
+page. It also stops itself after thirty minutes with nothing to do and no page
+looking at it; a page left open in front of you keeps it alive.
+
+**The page says it has lost the app.** The app stopped in the background,
+either after those idle minutes with the tab hidden or because it was
+reinstalled. Open it again from your Desktop, which starts it fresh in a new
+tab, and close the old one. Nothing about your files is affected.
 
 **On Windows, the file dialog opened behind the browser.** It is a plain
 Windows dialog and some browsers keep themselves on top; look in the taskbar.
@@ -269,6 +275,12 @@ delete `%LOCALAPPDATA%\Document to Markdown` and the two shortcuts. On Linux,
 delete `~/.local/share/document-to-markdown`,
 `~/.local/share/applications/document-to-markdown.desktop` and the copy on
 your Desktop. Nothing else was touched.
+
+## If it helped
+
+A star on GitHub is what makes a project like this findable by the next person
+searching for a way to read their PDFs as text, and it costs a click. Sharing
+the install line with someone who converts documents by hand does the rest.
 
 ## Contributing
 

@@ -88,6 +88,13 @@
     border-radius: 6px; font-size: 12.5px; overflow-wrap: anywhere;
   }
   .hide { display: none; }
+  .links { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+  .links a, .links button.link {
+    color: var(--accent); text-decoration: none; font-size: 13.5px;
+    border: 0; background: none; padding: 0; cursor: pointer; font: inherit;
+  }
+  .links a:hover, .links button.link:hover { text-decoration: underline; }
+  .links .star { font-weight: 600; }
   pre.report {
     white-space: pre-wrap; background: var(--code); padding: 12px; border-radius: 8px;
     font-size: 12.5px; max-height: 340px; overflow: auto;
@@ -206,6 +213,19 @@
         <input type="checkbox" id="auto-check"> Check automatically
       </label>
     </div>
+    <div class="links">
+      <span class="muted">Free and open source. If it saved you an afternoon:</span>
+      <a class="star" id="link-star" href="https://github.com/charles-martech/markdown-anything"
+         target="_blank" rel="noopener noreferrer">★ Star it on GitHub</a>
+      <span class="muted">·</span>
+      <span class="muted">Share it on</span>
+      <a id="share-x" href="#" target="_blank" rel="noopener noreferrer">X</a>
+      <a id="share-linkedin" href="#" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+      <button class="link" id="copy-link">Copy the link</button>
+      <span class="muted">·</span>
+      <a href="https://github.com/charles-martech/markdown-anything/issues/new/choose"
+         target="_blank" rel="noopener noreferrer">Report a problem</a>
+    </div>
     <p class="muted" style="margin:0; max-width:64ch">
       Your documents stay on this computer. They are read here, converted here,
       and written here — no file, and nothing out of a file, is ever sent
@@ -214,20 +234,60 @@
       setting itself up, which downloads Pandoc from GitHub and the PDF and
       spreadsheet readers from PyPI, and looking for a newer version, which
       asks GitHub what the newest release is. Both carry your computer's
-      address and nothing else.
+      address and nothing else. The links above open GitHub, X or LinkedIn in
+      your browser only when you click them.
     </p>
   </footer>
 </main>
 
 <script>
 const TOKEN = "__TOKEN__";
-const api = (path, body) => fetch(path + (path.includes("?") ? "&" : "?") + "token=" + TOKEN,
-  body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"},
-                            body: JSON.stringify(body)}).then(r => r.json());
 const $ = id => document.getElementById(id);
+
+// Every request goes through here. The server behind this page stops itself
+// after thirty idle minutes and is stopped by a reinstall, and a page left
+// open then points at nothing. A refused connection is that, not a bug in
+// what was clicked, so the page says so instead of failing quietly.
+async function api(path, body) {
+  let response;
+  try {
+    response = await fetch(path + (path.includes("?") ? "&" : "?") + "token=" + TOKEN,
+      body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"},
+                                body: JSON.stringify(body)});
+  } catch (error) {
+    serverGone();
+    throw error;
+  }
+  return response.json();
+}
+
+let heartbeat = null;
+
+function serverGone() {
+  for (const timer of [poller, setupPoller, updatePoller, heartbeat]) clearInterval(timer);
+  document.body.innerHTML =
+    '<main><h1>Document to Markdown</h1>' +
+    '<p class="sub">This page has lost the app behind it. The app stops itself ' +
+    'after thirty minutes with nothing to do, and reinstalling stops it too. ' +
+    'Nothing is wrong with your files.</p>' +
+    '<p class="sub"><b>Open Document to Markdown again from your Desktop</b>, ' +
+    'which starts it fresh in a new tab, and close this one.</p></main>';
+}
+
+// While this page is in front of the person, the server is not idle. A ping
+// every five minutes, only while the tab is visible, keeps it alive for as
+// long as the page is actually being looked at, and finds out promptly, when
+// the tab comes back into view, whether the server is still there.
+function keepAlive() {
+  if (document.visibilityState !== "visible") return;
+  api("/api/ping").catch(() => {});
+}
+heartbeat = setInterval(keepAlive, 5 * 60 * 1000);
+document.addEventListener("visibilitychange", keepAlive);
 // What was chosen: a list of files, or one folder. The page speaks in
 // lists throughout so that one file and forty are the same code path.
 let sources = [], cursor = 0, poller = null;
+let setupPoller = null, updatePoller = null;
 // Once the person has typed or chosen an output folder themselves, a new
 // choice of source stops moving it. Until then it follows the source.
 let outputChosen = false;
@@ -416,7 +476,7 @@ $("quit").onclick = async () => {
 
 // Updates. The app asks GitHub nothing unless this button is pressed: no
 // check on launch, no daily ping, nothing in the background.
-let updatePoller = null, updateCursor = 0;
+let updateCursor = 0;
 
 api("/api/settings").then(settings => {
   $("version-line").textContent = "Version " + settings.version;
@@ -479,8 +539,12 @@ async function checkForUpdates(quiet) {
     box.textContent = "Asking GitHub what the newest version is…";
   }
   $("check-update").disabled = true;
-  const data = await api("/api/update-check", {});
-  $("check-update").disabled = false;
+  let data;
+  try {
+    data = await api("/api/update-check", {});
+  } finally {
+    $("check-update").disabled = false;
+  }
   if (!data.ok) {
     if (quiet) return;          // an unasked-for check fails silently
     box.classList.remove("hide", "warn");
@@ -539,11 +603,31 @@ async function pollUpdate() {
   }
 }
 
+// The share links are ordinary links to the sites' own share pages: nothing
+// is sent, or even loaded, until the person clicks one.
+const REPO_URL = "https://github.com/charles-martech/markdown-anything";
+const SHARE_TEXT = "Document to Markdown: turn any PDF, Word, PowerPoint or Excel " +
+  "file into Markdown on your own computer. Free, open source, Mac, Windows and Linux.";
+$("share-x").href = "https://twitter.com/intent/tweet?text=" +
+  encodeURIComponent(SHARE_TEXT) + "&url=" + encodeURIComponent(REPO_URL);
+$("share-linkedin").href = "https://www.linkedin.com/sharing/share-offsite/?url=" +
+  encodeURIComponent(REPO_URL);
+$("copy-link").onclick = async () => {
+  const button = $("copy-link");
+  try {
+    await navigator.clipboard.writeText(REPO_URL);
+    button.textContent = "Copied";
+  } catch (error) {
+    button.textContent = REPO_URL;        // no clipboard: show it to copy by hand
+  }
+  setTimeout(() => { button.textContent = "Copy the link"; }, 2500);
+};
+
 function escapeHtml(text) {
   return text.replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 }
 
-let setupCursor = 0, setupPoller = null, pandocReady = false;
+let setupCursor = 0, pandocReady = false;
 
 async function refreshEngines() {
   const data = await api("/api/engines");
