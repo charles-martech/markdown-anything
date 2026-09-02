@@ -38,7 +38,7 @@ turn on for you. This is the list, and why each one is here.
 
 - [ ] Require a pull request before merging.
 - [ ] Require status checks to pass: `Test on Python 3.11`, `Lint`,
-      `Build the Mac app`.
+      `Build the Mac app`, `Install the Linux app`, `Test on Windows`.
 - [ ] Block force pushes and deletion of `main`.
 
 Even working alone, this is worth it: the checks are what stop a tired evening
@@ -71,11 +71,17 @@ good", and CI can build the bundle but cannot double-click it.
 `BUNDLE_FORMAT` at the root is a separate number, and it matters. An in-app
 update replaces the app's Python and HTML, which live in the support folder,
 but it cannot replace the launcher script, `Info.plist` or the icon inside the
-bundle. **If you change any of those three, bump `BUNDLE_FORMAT`.** An update
-carrying a higher number than the installed bundle refuses to install itself
-and tells the person to run the install line instead, which is the only thing
-that can replace a bundle. Forgetting to bump it is how someone ends up with
-new code under an old launcher.
+Mac bundle, nor the shortcut or menu entry the Windows and Linux installers
+made. **If you change any of those, bump `BUNDLE_FORMAT`.** An update carrying
+a higher number than the installed bundle refuses to install itself and tells
+the person to run the install line instead, which is the only thing that can
+replace a bundle. Forgetting to bump it is how someone ends up with new code
+under an old launcher.
+
+Open the app on a real Mac before tagging, and, since 1.1.0, on a Windows
+machine too if the change touched anything platform-shaped: CI installs and
+starts the app on all three, but only a person can see whether a dialog opened
+in front of the browser.
 
 `scripts/doc2gfm.py` carries its own `VERSION`. That is the converter's, not
 the app's — it is written into the front matter of every file it produces, so
@@ -95,7 +101,10 @@ it moves when the converter's output changes, not when the app is released.
 - **Read the Dependabot pull requests** for the actions. They are other
   people's code running with your repository's token.
 - **Run `scripts/selftest.sh` on a real Mac** now and then. CI proves the app
-  builds; only a Mac proves the icon still opens it.
+  builds; only a Mac proves the icon still opens it. The same goes for the
+  Windows shortcut and the Linux menu entry.
+- **Try the MCP server against a real client** after touching it. The tests
+  speak the protocol by hand; a client is what people use.
 
 ## Answering issues
 

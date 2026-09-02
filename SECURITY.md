@@ -55,10 +55,10 @@ on your machine, so it is treated as such:
   it does not come up, it is thrown away and the version you have keeps running.
 - Nothing installs without you pressing the button.
 
-An update never touches `/Applications`. It lands in the app's own folder, and
-the launcher prefers it — so if an update ever misbehaves, deleting
-`~/Library/Application Support/Document to Markdown/current` puts back the
-version that came with the app, with no terminal and no reinstall.
+An update never touches `/Applications`, or the installed copy on Windows and
+Linux. It lands in `current` inside the app's own folder, and the launcher
+prefers it — so if an update ever misbehaves, deleting that one folder puts
+back the version that came with the app, with no terminal and no reinstall.
 
 The honest caveat: an app that can update itself is one that can be made to
 install something bad if this repository is ever taken over. That is the same
@@ -82,6 +82,21 @@ It is protected in four ways:
 
 The server stops itself after thirty idle minutes, and the "Quit the app"
 button stops it immediately.
+
+On Windows, the file and folder dialogs are run through PowerShell. The
+script is fixed text passed base64-encoded, and the prompt travels in an
+environment variable, so nothing from the page is ever part of a command —
+the same rule as the AppleScript on a Mac.
+
+### The MCP server
+
+`scripts/mcp_server.py` lets an AI assistant on this computer read a document
+as Markdown. It talks to the assistant's client over a pipe, opens no socket,
+and makes no network request. It converts whatever path the client names, as
+the account running it: that is the feature, and it means an assistant you
+have connected to it can read any document you can. Connect it to tools you
+trust with your files, which is the same trust you give them by pasting text
+into a chat.
 
 ### What it can do if someone does get in
 
@@ -111,7 +126,17 @@ bash install.sh
 
 The installer builds the app from the files in the repository. It copies
 nothing into system folders, asks for no password, and everything it creates is
-in `/Applications`, your Desktop, and the app's own support folder.
+in `/Applications`, your Desktop, and the app's own support folder. The Linux
+path of the same script, and `windows/install.ps1`, do the same in
+`~/.local/share/document-to-markdown` and `%LOCALAPPDATA%\Document to Markdown`
+respectively, plus a menu entry or Start Menu shortcut. To read the Windows
+one first:
+
+```powershell
+irm https://raw.githubusercontent.com/charles-martech/markdown-anything/main/windows/install.ps1 -OutFile install.ps1
+notepad install.ps1
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
 
 ## Supported versions
 

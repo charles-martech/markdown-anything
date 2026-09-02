@@ -3,6 +3,63 @@
 Newest first. Dates are when the change landed on `main`, which is also when
 it reached anyone who runs the install line.
 
+## 1.1.0 — 2026-09-02
+
+### Added
+
+- **Convert one file, or a few, not only a folder.** A **Choose files…**
+  button beside **Choose a folder…**, with several files allowed at once, and
+  the typed path accepts a file too. The Markdown goes to the same folder a
+  conversion of the file's whole folder would use, so doing one file today and
+  the folder next month lands in one tree with nothing done twice. When one
+  file was converted, the result offers that file rather than the folder
+  around it.
+- **Windows and Linux.** The app now runs on all three: a PowerShell install
+  line for Windows (`windows/install.ps1`), and the existing install line now
+  installs on Linux too, with a menu entry and a Desktop shortcut. Native file
+  and folder dialogs on each, "show in File Explorer" on Windows, Pandoc
+  fetched for the right system, and the in-app update working the same way
+  everywhere. CI installs and starts the app on Windows and Linux as well as
+  building it on a Mac.
+- **AI assistants read documents through it.** `--stdout` converts one file
+  and prints the Markdown, writing nothing: the shape an assistant wants
+  before reading a PDF, at a fraction of the tokens the raw file costs, with
+  the document never leaving the machine. The Claude Code skill now says so
+  in its description, so it triggers on "summarize this PDF" and not only on
+  "convert this folder".
+- **An MCP server**, `scripts/mcp_server.py`, standard library only, so Claude
+  Desktop, Cursor, Gemini CLI, Codex CLI, ChatGPT and any other client that
+  speaks MCP can read documents the same way. Long documents come back in
+  pieces. `docs/ai-agents.md` has the two-line setup for each tool.
+- The converter run from a terminal, a skill or the MCP server finds the
+  engines the app installed for itself, so setting the app up once is enough
+  everywhere.
+
+### Changed
+
+- PDFs, slides, spreadsheets and plain-text formats no longer need Pandoc at
+  all. A machine without it converts those and is told, per file, about the
+  rest.
+- A folder preview stops counting at fifty thousand files instead of walking
+  a home folder to the end, and skips dot-folders, `node_modules` and
+  `__pycache__` the way the converter does.
+- The suggested output folder follows each new choice until the person has
+  set it themselves, instead of sticking with the first.
+
+### Fixed
+
+- A PDF that PyMuPDF could not open (encrypted, damaged) failed outright
+  instead of being tried by the next reader. It is now.
+- A Markdown file chosen on its own, with the output set to its own folder,
+  would have been written over itself. It is refused.
+- Image links in Pandoc output are made relative whichever path separator
+  the platform used; a LibreOffice profile path with a space or a drive
+  letter is passed as a proper URI.
+- File names the terminal's encoding cannot show no longer crash a run, and
+  the converter's output to the app is read as UTF-8 regardless of locale.
+- The converter's sniffing of a file with no extension left a file handle
+  open.
+
 ## 1.0.4 — 2026-08-31
 
 ### Added

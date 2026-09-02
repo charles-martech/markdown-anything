@@ -34,7 +34,7 @@ body:
     id: version
     attributes:
       label: Your system
-      placeholder: "macOS 15 on Apple silicon, using the app"
+      placeholder: "macOS 15 on Apple silicon, Windows 11, or Ubuntu 24.04, using the app"
   - type: textarea
     id: file
     attributes:

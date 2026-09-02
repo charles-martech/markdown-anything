@@ -55,4 +55,11 @@ python3 "$SCRIPT" "$src" -o "$work/out" -q
 echo
 echo "report:"
 sed -n '1,8p' "$work/out/_conversion-report.md"
+echo
+echo "one file to standard output, the way an AI assistant reads it:"
+if python3 "$SCRIPT" "$src/doc.docx" --stdout | head -3 | grep -q .; then
+  echo "ok"
+else
+  echo "FAIL: --stdout printed nothing"; rc=1
+fi
 exit $rc

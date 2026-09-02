@@ -41,9 +41,18 @@ ruff check .
 shellcheck install.sh macos/build_app.sh scripts/*.sh
 ```
 
-CI runs all of these on Python 3.9, 3.11 and 3.13, and builds the Mac app.
-It pins the ruff version, so `pip install ruff==0.15.8` if a lint result
-here disagrees with the one on your pull request.
+CI runs all of these on Python 3.9, 3.11 and 3.13, builds the Mac app,
+installs and starts the app on Linux and on Windows, and runs the unit tests
+on Windows with no engine installed. It pins the ruff version, so
+`pip install ruff==0.15.8` if a lint result here disagrees with the one on
+your pull request.
+
+The Windows installer is PowerShell (`windows/install.ps1`) because a Windows
+shortcut and a Windows Python are made from PowerShell, not bash; CI parses
+and runs it. Anything in `app/server.py` that touches the platform — dialogs,
+revealing a file, where the support folder is, how Pandoc is fetched — has a
+branch per system, and a change to one is worth trying on the other two or
+saying in the pull request that you could not.
 
 ## Adding a format
 
@@ -61,11 +70,21 @@ A format that needs its own reader gets a `convert_*` function and a branch in
 ## Versions
 
 `VERSION` at the root is the app's version, read at runtime so a running app can
-compare itself with a release. `BUNDLE_FORMAT` beside it covers the parts of the
-Mac bundle an in-app update cannot replace — the launcher, `Info.plist`, the
-icon. Change any of those three and bump it, or people will get new code running
-under an old launcher. `scripts/doc2gfm.py` has its own `VERSION`, which belongs
-to the converter's output, not to the app.
+compare itself with a release. `BUNDLE_FORMAT` beside it covers the parts an
+in-app update cannot replace — on a Mac the launcher, `Info.plist` and the
+icon; on Windows and Linux the shortcut and menu entry. Change any of those and
+bump it, or people will get new code running under an old launcher.
+`scripts/doc2gfm.py` has its own `VERSION`, which belongs to the converter's
+output, not to the app.
+
+## The AI side
+
+`.claude/skills/doc-to-gfm/SKILL.md` is what Claude Code reads;
+`scripts/mcp_server.py` is what every other assistant talks to; both sit on
+`convert_file_to_markdown()` in the converter. A change to what the converter
+produces reaches all three. The MCP server is standard library only and speaks
+JSON-RPC one line at a time; `tests/test_app.py` drives it through a session,
+and `docs/ai-agents.md` shows how to do the same by hand.
 
 ## House style
 
@@ -74,9 +93,9 @@ to the converter's output, not to the app.
   "ERR_ENCRYPTED_DOCUMENT".
 - Comments explain why, not what. If a line looks odd and is deliberate, say
   what would go wrong without it.
-- Standard library only in `app/`. The app is meant to run on a Mac with
-  nothing installed, and every dependency is something that can fail to
-  install on someone's machine at the worst moment.
+- Standard library only in `app/` and `scripts/`. The app is meant to run on
+  a machine with nothing installed, and every dependency is something that can
+  fail to install on someone's machine at the worst moment.
 - One bad file never stops a run. Anything that can fail per-file gets
   recorded in the report and the batch carries on.
 

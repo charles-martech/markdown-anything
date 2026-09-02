@@ -20,6 +20,7 @@ body:
     attributes:
       label: Anything in the log
       description: >
-        macOS: `~/Library/Application Support/Document to Markdown/log.txt`.
+        `log.txt` in the app's folder: on a Mac `~/Library/Application Support/Document to Markdown`,
+        on Windows `%LOCALAPPDATA%\Document to Markdown`, on Linux `~/.local/share/document-to-markdown`.
         Please read it before pasting: it holds the paths of folders you converted.
       render: text
