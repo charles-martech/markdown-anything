@@ -7,6 +7,25 @@ it reached anyone who runs the install line.
 
 ### Fixed
 
+- **A PDF could come out with most of its text missing.** How much text
+  pymupdf4llm finds inside vector art depends on its version, and an older one
+  drops it silently: a page laid out as a drawn table arrives nearly empty, and
+  nothing in the output says so. On one 11-page document an older reader
+  produced 3.5 KB where `pdftotext` produced 17.7 KB. Where `pdftotext` is
+  available its reading is now compared against pymupdf4llm's, and the fuller
+  one is used, with a note in the report saying what each found. Diagrams are
+  still saved either way.
+- **A page could carry the same picture twice.** A page drawn entirely as
+  vector art has no text for the picture to stand beside, and the picture was
+  both substituted and appended; a page holding two scraped-text blocks had the
+  same page picture put in place of each. A page now carries exactly one
+  picture, and a second scraped block is left alone rather than deleted.
+- **Every page of a document could be saved as a picture.** How finely PyMuPDF
+  splits a drawing into shapes varies by version, and on some of them a page of
+  prose over a ruled table counts as a diagram. When more than three quarters
+  of a document's pages qualify, the measure is no longer telling them apart,
+  and none are saved rather than all of them.
+
 - **An updated app went on behaving like the old one, without saying so.** The
   update replaces the app's files under a server that is already running, and
   tells the person once, in the update log, to quit and open it again. The
