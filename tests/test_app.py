@@ -489,9 +489,45 @@ class ConverterTest(unittest.TestCase):
         self.assertNotIn("first", out)
         self.assertIn("second", out)
 
+    def test_the_reader_advice_never_contradicts_the_fallback(self) -> None:
+        """After a fall back pymupdf4llm is installed, so do not ask for it."""
+        self.assertEqual(doc2gfm.engine_advice("pdftotext", True, True), "")
+        self.assertEqual(doc2gfm.engine_advice("pdftotext", True, False), "")
+
+    def test_the_reader_advice_appears_when_it_is_really_missing(self) -> None:
+        self.assertIn("better PDF text",
+                      doc2gfm.engine_advice("pdftotext", False, True))
+        self.assertIn("diagrams saved as pictures",
+                      doc2gfm.engine_advice("pdftotext", False, True))
+
+    def test_the_reader_advice_omits_pictures_nobody_asked_for(self) -> None:
+        advice = doc2gfm.engine_advice("pdftotext", False, False)
+        self.assertIn("better PDF text", advice)
+        self.assertNotIn("pictures", advice)
+
+    def test_no_advice_when_pymupdf4llm_read_the_file(self) -> None:
+        self.assertEqual(doc2gfm.engine_advice("pymupdf", False, True), "")
+
     def test_text_volume_counts_words_not_markup(self) -> None:
         self.assertEqual(doc2gfm.text_volume(["## ab |---| cd"]), 4)
         self.assertEqual(doc2gfm.text_volume([]), 0)
+
+    def test_letter_sized_shapes_are_not_a_diagram(self) -> None:
+        """Older PyMuPDF returns each glyph's outline from get_drawings."""
+        if pymupdf is None:
+            self.skipTest("pymupdf is not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            prose = Path(tmp) / "prose.pdf"
+            doc = pymupdf.open()
+            page = doc.new_page()
+            for row in range(20):
+                for column in range(16):
+                    # About the size of a letter, which is what a page of text
+                    # looks like through an older reader.
+                    page.draw_rect(pymupdf.Rect(40 + column * 30, 40 + row * 30,
+                                                45 + column * 30, 47 + row * 30))
+            doc.save(str(prose))
+            self.assertEqual(doc2gfm.diagram_pages(prose), {})
 
     def test_a_document_where_every_page_looks_drawn_saves_none(self) -> None:
         """Some PyMuPDF versions count ruled prose pages as many shapes."""
