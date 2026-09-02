@@ -142,10 +142,12 @@ the original.
 Diagrams — flowcharts, org charts, architecture drawings — are vector art, not
 embedded images, so there is nothing to extract and their labels come out in
 drawing order as scrambled fragments. A page holding at least
-twelve separate shapes over at least fifteen percent of the page is read as a
-diagram, and a picture of that page is saved into the same `.media` folder as
+twelve separate shapes, each at least 20pt on both sides, covering at least
+fifteen percent of the page is read as a diagram, and a picture of that page is saved into the same `.media` folder as
 embedded images and linked from the Markdown, in place of the scrambled text
-where the engine produced any. This needs pymupdf and is skipped under
+where the engine produced any. The size floor matters: older PyMuPDF returns the outline of every glyph, so
+without it a page of prose counts as hundreds of shapes. This needs pymupdf and
+is skipped under
 `--no-media`. When more than three quarters of a document's pages qualify the
 measure is not telling pages apart, and none are saved. `--pdf-picture-dpi` sets the resolution, 150 by default.
 

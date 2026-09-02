@@ -7,6 +7,16 @@ it reached anyone who runs the install line.
 
 ### Fixed
 
+- **Diagrams were never saved on an older PDF reader.** A Mac on the system
+  Python 3.9 can install no newer than pymupdf 1.26, and that version returns
+  the outline of every glyph from `get_drawings`, so a page of prose arrived as
+  several hundred letter-sized strokes and counted as a diagram. Every page in
+  a document qualified, the share cap added in 1.2.1 then correctly refused to
+  save a picture of all of them, and the result was no diagrams at all. A shape
+  must now be at least 20pt on both sides to count, which a diagram's node is
+  and a letter is not. On the reported document both pymupdf 1.26.5 and 1.28.2
+  now pick out the same three pages.
+
 - **The report told people to install a reader they already had.** When
   pymupdf4llm read a PDF but lost text, and the fuller `pdftotext` reading was
   used instead, the run was then treated as though pymupdf4llm had been missing

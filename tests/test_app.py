@@ -512,6 +512,23 @@ class ConverterTest(unittest.TestCase):
         self.assertEqual(doc2gfm.text_volume(["## ab |---| cd"]), 4)
         self.assertEqual(doc2gfm.text_volume([]), 0)
 
+    def test_letter_sized_shapes_are_not_a_diagram(self) -> None:
+        """Older PyMuPDF returns each glyph's outline from get_drawings."""
+        if pymupdf is None:
+            self.skipTest("pymupdf is not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            prose = Path(tmp) / "prose.pdf"
+            doc = pymupdf.open()
+            page = doc.new_page()
+            for row in range(20):
+                for column in range(16):
+                    # About the size of a letter, which is what a page of text
+                    # looks like through an older reader.
+                    page.draw_rect(pymupdf.Rect(40 + column * 30, 40 + row * 30,
+                                                45 + column * 30, 47 + row * 30))
+            doc.save(str(prose))
+            self.assertEqual(doc2gfm.diagram_pages(prose), {})
+
     def test_a_document_where_every_page_looks_drawn_saves_none(self) -> None:
         """Some PyMuPDF versions count ruled prose pages as many shapes."""
         if pymupdf is None:

@@ -643,6 +643,10 @@ def convert_sheet(args: argparse.Namespace, src: Path, job: Job,
 # prose with a table under it has only a handful of shapes once the hairline
 # rules are discounted, so the two separate cleanly.
 DIAGRAM_MIN_SHAPES = 12
+# Both sides a shape must have to count. Older PyMuPDF returns the outline
+# of every glyph from get_drawings, so a page of prose arrives as hundreds
+# of letter-sized strokes; a node in a diagram is far bigger than a letter.
+DIAGRAM_MIN_SHAPE_SIDE = 20
 DIAGRAM_MIN_PAGE_FRACTION = 0.15
 # pdftotext reading this much more than pymupdf4llm means pymupdf4llm is
 # dropping text rather than reading the page differently.
@@ -721,9 +725,11 @@ def diagram_pages(src: Path) -> dict[int, "object"]:
             boxes = []
             for drawing in page.get_drawings():
                 rect = drawing["rect"]
-                # Hairlines are rules and underlines; a shape covering most of
-                # the page is the background panel, not part of a diagram.
-                if rect.width < 3 or rect.height < 3:
+                # Too small to be a diagram's node: a hairline rule, an
+                # underline, or on older PyMuPDF a single letter's outline. A
+                # shape covering most of the page is the background panel.
+                if (rect.width < DIAGRAM_MIN_SHAPE_SIDE
+                        or rect.height < DIAGRAM_MIN_SHAPE_SIDE):
                     continue
                 if abs(rect) > 0.6 * page_area:
                     continue
