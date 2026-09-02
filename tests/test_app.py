@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import http.client
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -253,6 +254,7 @@ class UpdatePreferenceTest(unittest.TestCase):
         server.write_settings(saved)
         self.assertTrue(server.settings_for_page()["checkNow"])
 
+    @unittest.skipIf(sys.platform == "win32", "Windows has no Unix file modes")
     def test_the_answer_is_not_readable_by_other_accounts(self) -> None:
         server.set_auto_check(True)
         self.assertEqual(server.SETTINGS_FILE.stat().st_mode & 0o777, 0o600)
@@ -323,7 +325,10 @@ class DownloadTest(unittest.TestCase):
             real = Path(tmp) / "pandoc"
             real.write_text("binary")
             link = Path(tmp) / "pandoc-lua"
-            link.symlink_to("pandoc")
+            try:
+                link.symlink_to("pandoc")
+            except OSError as exc:   # Windows without developer mode
+                self.skipTest(f"cannot create a symlink here: {exc}")
             archive = Path(tmp) / "linked.tar.gz"
             with tarfile.open(archive, "w:gz") as tf:
                 tf.add(real, arcname="pandoc-3/bin/pandoc")
@@ -386,6 +391,311 @@ class ConverterTest(unittest.TestCase):
     def test_table_cells_cannot_break_out_of_the_table(self) -> None:
         rows = doc2gfm._gfm_table([["a|b", "c"], ["d", "e"]])
         self.assertIn("a\\|b", rows[0])
+
+
+class ChoosingTest(unittest.TestCase):
+    """Files and folders as the page sends them, and where the output goes."""
+
+    def test_a_folder_gets_a_sibling_named_after_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "Reports"
+            folder.mkdir()
+            self.assertEqual(server.default_output([str(folder)]),
+                             str(Path(tmp) / "Reports-markdown"))
+
+    def test_a_file_goes_where_its_folder_would(self) -> None:
+        # Converting one file today and the folder next month must land in
+        # the same tree, with the file already done.
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "Reports"
+            folder.mkdir()
+            (folder / "a.pdf").write_bytes(b"%PDF")
+            (folder / "b.docx").write_bytes(b"PK")
+            expected = str(Path(tmp) / "Reports-markdown")
+            self.assertEqual(server.default_output([str(folder / "a.pdf")]), expected)
+            self.assertEqual(server.default_output(
+                [str(folder / "a.pdf"), str(folder / "b.docx")]), expected)
+
+    def test_files_from_two_folders_share_their_common_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("one", "two"):
+                (Path(tmp) / name).mkdir()
+                (Path(tmp) / name / "x.txt").write_text("x")
+            got = server.default_output(
+                [str(Path(tmp) / "one" / "x.txt"), str(Path(tmp) / "two" / "x.txt")])
+            self.assertEqual(got, str(Path(tmp).parent / f"{Path(tmp).name}-markdown"))
+
+    def test_a_file_in_the_home_folder_does_not_get_a_sibling_of_home(self) -> None:
+        # ~/report.pdf must not suggest /Users/me-markdown, which is not
+        # somewhere anyone can write.
+        home = Path.home()
+        got = server.default_output([str(home / "report.pdf")])
+        self.assertEqual(got, str(home / "Markdown"))
+        self.assertEqual(server.default_output([str(home)]), str(home / "Markdown"))
+
+    def test_nothing_chosen_is_nothing(self) -> None:
+        self.assertEqual(server.default_output([]), "")
+        self.assertEqual(server.default_output([""]), "")
+        self.assertEqual(server.describe_sources([]), {"path": "", "paths": []})
+
+    def test_only_existing_paths_are_converted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            real = Path(tmp) / "a.txt"
+            real.write_text("a")
+            got = server.requested_sources(
+                {"sources": [str(real), str(Path(tmp) / "missing"), "", 3, None,
+                             str(real)]})
+            self.assertEqual(got, [real])
+            # The single-string form the page used before files could be chosen.
+            self.assertEqual(server.requested_sources({"source": str(real)}), [real])
+            self.assertEqual(server.requested_sources({"sources": "not a list"}), [])
+
+    def test_the_preview_counts_files_the_way_the_converter_walks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a.pdf").write_bytes(b"%PDF")
+            (root / "sub").mkdir()
+            (root / "sub" / "b.docx").write_bytes(b"PK")
+            (root / ".git").mkdir()
+            (root / ".git" / "config").write_text("hidden folder")
+            (root / ".DS_Store").write_text("hidden file")
+            (root / "node_modules").mkdir()
+            (root / "node_modules" / "x.js").write_text("nobody means these")
+            preview = server.count_candidates([str(root)])
+            self.assertEqual(preview["files"], 2)
+            self.assertFalse(preview["capped"])
+            self.assertEqual({k["ext"] for k in preview["kinds"]}, {".pdf", ".docx"})
+            described = server.describe_sources([str(root / "a.pdf")])
+            self.assertEqual(described["files"], 1)
+            self.assertFalse(described["isFolder"])
+            self.assertTrue(server.describe_sources([str(root)])["isFolder"])
+
+    def test_the_outputs_come_from_the_manifest_and_nothing_else(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(server.manifest_outputs(tmp), [])
+            self.assertEqual(server.manifest_outputs(""), [])
+            manifest = Path(tmp) / "_conversion-manifest.json"
+            manifest.write_text("{not json")
+            self.assertEqual(server.manifest_outputs(tmp), [])
+            manifest.write_text(json.dumps({"files": [
+                {"source": "/s/a.pdf", "output": "/o/a.md", "status": "converted"},
+                {"source": "/s/b.pdf", "output": "/o/b.md", "status": "unchanged"},
+                {"source": "/s/c.png", "output": None, "status": "skipped"},
+                {"source": "/s/d.pdf", "output": "/o/d.md", "status": "failed"},
+                "junk"]}))
+            self.assertEqual([o["output"] for o in server.manifest_outputs(tmp)],
+                             ["/o/a.md", "/o/b.md"])
+
+
+def minimal_pptx(path: Path) -> None:
+    """A one-slide deck built by hand, so no engine is needed to read it."""
+    ns = ('xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+          'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"')
+    slide = (f"<p:sld {ns}><p:cSld><p:spTree>"
+             "<p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Title\"/><p:nvPr>"
+             "<p:ph type=\"title\"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:r>"
+             "<a:t>Hello slide</a:t></a:r></a:p></p:txBody></p:sp>"
+             "<p:sp><p:txBody><a:p><a:r><a:t>A bullet</a:t></a:r></a:p>"
+             "</p:txBody></p:sp></p:spTree></p:cSld></p:sld>")
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("[Content_Types].xml", "<Types/>")
+        zf.writestr("ppt/slides/slide1.xml", slide)
+
+
+class SingleFileTest(unittest.TestCase):
+    """One file in, Markdown out, nothing written: what an assistant wants."""
+
+    def run_converter(self, *args: str, env: dict | None = None):
+        return subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "doc2gfm.py"), *args],
+            capture_output=True, timeout=120,
+            env={**os.environ, **(env or {})})
+
+    def test_stdout_prints_the_markdown_and_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            deck = Path(tmp) / "deck.pptx"
+            minimal_pptx(deck)
+            result = self.run_converter(str(deck), "--stdout")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = result.stdout.decode("utf-8")
+            self.assertIn("## Slide 1: Hello slide", text)
+            self.assertIn("- A bullet", text)
+            self.assertNotIn("source_sha256", text)   # no front matter unasked
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()),
+                             ["deck.pptx"])
+
+    def test_stdout_can_keep_the_front_matter_when_asked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            note = Path(tmp) / "note.txt"
+            note.write_text("plain words\n", encoding="utf-8")
+            result = self.run_converter(str(note), "--stdout", "--front-matter")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(result.stdout.startswith(b"---\nsource: \"note.txt\""))
+
+    def test_stdout_is_utf8_whatever_the_locale_says(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            note = Path(tmp) / "note.txt"
+            note.write_text("caf\u00e9 \u2014 na\u00efve\n", encoding="utf-8")
+            result = self.run_converter(str(note), "--stdout",
+                                        env={"LC_ALL": "C", "LANG": "C",
+                                             "PYTHONIOENCODING": "ascii"})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.decode("utf-8").strip(),
+                             "caf\u00e9 \u2014 na\u00efve")
+
+    def test_stdout_wants_exactly_one_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            a = Path(tmp) / "a.txt"
+            a.write_text("a")
+            b = Path(tmp) / "b.txt"
+            b.write_text("b")
+            self.assertEqual(self.run_converter(str(a), str(b), "--stdout").returncode, 2)
+            self.assertEqual(self.run_converter(tmp, "--stdout").returncode, 2)
+            self.assertEqual(self.run_converter(str(a), "--stdout", "-o", tmp).returncode, 2)
+
+    def test_a_file_it_cannot_read_is_an_error_with_a_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            picture = Path(tmp) / "photo.png"
+            picture.write_bytes(b"\x89PNG")
+            result = self.run_converter(str(picture), "--stdout")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(b"not a document this converter reads", result.stderr)
+            self.assertEqual(result.stdout, b"")
+
+    def test_formats_read_without_pandoc_do_not_need_it(self) -> None:
+        # PDFs, slides, spreadsheets and text are read by this script itself.
+        # A machine without Pandoc still gets those, and is told about the
+        # rest per file rather than refused at the door.
+        with tempfile.TemporaryDirectory() as tmp:
+            deck = Path(tmp) / "deck.pptx"
+            minimal_pptx(deck)
+            nowhere = str(Path(tmp) / "empty-path")
+            result = self.run_converter(str(deck), "--stdout",
+                                        env={"PATH": nowhere, "DOC2MD_HOME": tmp})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(b"Hello slide", result.stdout)
+            html = Path(tmp) / "page.html"
+            html.write_text("<p>hi</p>")
+            result = self.run_converter(str(html), "--stdout",
+                                        env={"PATH": nowhere, "DOC2MD_HOME": tmp})
+            if doc2gfm.find_tool("pandoc") is None:
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(b"pandoc is not installed", result.stderr)
+
+    def test_a_markdown_file_is_never_written_over_itself(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            page = Path(tmp) / "notes.md"
+            page.write_text("# notes")
+            result = self.run_converter(str(page), "-o", tmp)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn(b"would be overwritten", result.stderr)
+            self.assertEqual(page.read_text(), "# notes")
+
+    def test_the_function_the_mcp_server_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            note = Path(tmp) / "note.txt"
+            note.write_text("from python\n")
+            self.assertEqual(doc2gfm.convert_file_to_markdown(note), "from python\n")
+            with self.assertRaises(doc2gfm.ConversionError):
+                doc2gfm.convert_file_to_markdown(Path(tmp) / "missing.pdf")
+
+
+class McpServerTest(unittest.TestCase):
+    """The converter over MCP: one JSON-RPC message per line, over stdio."""
+
+    def session(self, messages: list[dict]) -> list[dict]:
+        process = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "mcp_server.py")],
+            input="\n".join(json.dumps(m) for m in messages) + "\n",
+            capture_output=True, text=True, encoding="utf-8", timeout=120)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        return [json.loads(line) for line in process.stdout.splitlines() if line]
+
+    def test_initialize_lists_and_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            note = Path(tmp) / "note.txt"
+            note.write_text("read me over mcp\n", encoding="utf-8")
+            replies = self.session([
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                 "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                            "clientInfo": {"name": "test", "version": "0"}}},
+                {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+                {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                 "params": {"name": "convert_document",
+                            "arguments": {"path": str(note)}}},
+                {"jsonrpc": "2.0", "id": 4, "method": "ping"},
+            ])
+            by_id = {reply["id"]: reply for reply in replies}
+            self.assertEqual(set(by_id), {1, 2, 3, 4})   # no reply to the notification
+            init = by_id[1]["result"]
+            self.assertEqual(init["protocolVersion"], "2025-03-26")
+            self.assertIn("tools", init["capabilities"])
+            self.assertIn("convert_document", init["instructions"])
+            names = [tool["name"] for tool in by_id[2]["result"]["tools"]]
+            self.assertEqual(names, ["convert_document", "convert_folder"])
+            for tool in by_id[2]["result"]["tools"]:
+                self.assertEqual(tool["inputSchema"]["type"], "object")
+            call = by_id[3]["result"]
+            self.assertFalse(call["isError"])
+            self.assertEqual(call["content"][0]["text"], "read me over mcp\n")
+            self.assertEqual(by_id[4]["result"], {})
+
+    def test_a_long_document_comes_in_pieces(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            note = Path(tmp) / "long.txt"
+            note.write_text("x" * 5000 + "\n", encoding="utf-8")
+            replies = self.session([
+                {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                 "params": {"name": "convert_document",
+                            "arguments": {"path": str(note), "max_chars": 1000}}},
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                 "params": {"name": "convert_document",
+                            "arguments": {"path": str(note), "offset": 4001,
+                                          "max_chars": 1000}}},
+            ])
+            first = replies[0]["result"]["content"][0]["text"]
+            self.assertTrue(first.startswith("x" * 1000))
+            self.assertIn("offset=1000", first)
+            second = replies[1]["result"]["content"][0]["text"]
+            self.assertEqual(second, "x" * 999 + "\n")   # the rest, no note
+
+    def test_failures_are_answers_not_crashes(self) -> None:
+        replies = self.session([
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+             "params": {"name": "convert_document",
+                        "arguments": {"path": "/no/such/file.pdf"}}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+             "params": {"name": "no_such_tool"}},
+            {"jsonrpc": "2.0", "id": 3, "method": "no/such/method"},
+            {"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+             "params": {"name": "convert_folder", "arguments": {}}},
+        ])
+        by_id = {reply["id"]: reply for reply in replies}
+        self.assertTrue(by_id[1]["result"]["isError"])
+        self.assertIn("no such file", by_id[1]["result"]["content"][0]["text"])
+        self.assertEqual(by_id[2]["error"]["code"], -32602)
+        self.assertEqual(by_id[3]["error"]["code"], -32601)
+        self.assertTrue(by_id[4]["result"]["isError"])
+
+    def test_a_folder_conversion_returns_the_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "docs"
+            source.mkdir()
+            (source / "a.txt").write_text("a\n")
+            minimal_pptx(source / "deck.pptx")
+            output = Path(tmp) / "out"
+            replies = self.session([
+                {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                 "params": {"name": "convert_folder",
+                            "arguments": {"source": str(source),
+                                          "output": str(output)}}},
+            ])
+            result = replies[0]["result"]
+            self.assertFalse(result["isError"], result)
+            self.assertIn("Converted: 2", result["content"][0]["text"])
+            self.assertTrue((output / "a.md").is_file())
+            self.assertTrue((output / "deck.md").is_file())
 
 
 if __name__ == "__main__":

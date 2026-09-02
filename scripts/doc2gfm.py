@@ -7,6 +7,12 @@ touches files whose source changed. Nothing is ever written over the input.
 
 Usage:
     python3 doc2gfm.py INPUT [INPUT ...] -o OUTDIR [options]
+    python3 doc2gfm.py FILE --stdout
+
+The second form converts one file and prints the Markdown, writing nothing to
+disk. It is the shape an AI assistant wants: read a PDF or a Word file as
+text, at a fraction of the tokens the raw file would cost, without leaving a
+folder behind.
 
 Run with --help for the full option list, or read docs/formats.md for the
 routing table (which extension goes through which engine).
@@ -29,7 +35,36 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
+
+IS_MAC = sys.platform == "darwin"
+IS_WINDOWS = sys.platform == "win32"
+
+
+def app_support_dir() -> Path:
+    """Where the Document to Markdown app keeps the engines it installs.
+
+    The app downloads Pandoc and the reader libraries into its own folder
+    rather than onto the system, so a terminal, a Claude Code skill or an MCP
+    server running this script directly would never see them. Looking here
+    means anyone who has set the app up once has a working converter
+    everywhere. app/server.py defines the same folder; the two must agree.
+    """
+    override = os.environ.get("DOC2MD_HOME")
+    if override:
+        return Path(override)
+    if IS_MAC:
+        return Path.home() / "Library/Application Support/Document to Markdown"
+    if IS_WINDOWS:
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData/Local")
+        return Path(base) / "Document to Markdown"
+    return Path.home() / ".local/share/document-to-markdown"
+
+
+APP_SUPPORT = app_support_dir()
+if (APP_SUPPORT / "python").is_dir():
+    # The reader libraries the app installed: pymupdf4llm and openpyxl.
+    sys.path.append(str(APP_SUPPORT / "python"))
 
 # --------------------------------------------------------------------------
 # Routing table: extension -> (route, argument)
@@ -134,13 +169,34 @@ BINARY_SKIP = {
 }
 
 # A GUI launcher hands us a bare PATH, and LibreOffice never appears on any
-# PATH at all: it lives inside its application bundle. Look there too.
-EXTRA_TOOL_DIRS = [
-    "/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin",
-    str(Path.home() / ".local/bin"),
-    "/Applications/LibreOffice.app/Contents/MacOS",
-    str(Path.home() / "Applications/LibreOffice.app/Contents/MacOS"),
-]
+# PATH at all: it lives inside its application bundle. Look there too, and in
+# the app's own bin folder first, so a Pandoc the app installed is found
+# before one that happens to be on PATH.
+EXTRA_TOOL_DIRS = [str(APP_SUPPORT / "bin")]
+if IS_WINDOWS:
+    _program_files = [os.environ.get("ProgramFiles", r"C:\Program Files"),
+                      os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                      os.environ.get("LOCALAPPDATA", "")]
+    for _base in [b for b in _program_files if b]:
+        EXTRA_TOOL_DIRS += [
+            str(Path(_base) / "Pandoc"),
+            str(Path(_base) / "LibreOffice" / "program"),
+            str(Path(_base) / "poppler" / "Library" / "bin"),
+        ]
+else:
+    EXTRA_TOOL_DIRS += [
+        "/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin",
+        str(Path.home() / ".local/bin"),
+        "/Applications/LibreOffice.app/Contents/MacOS",
+        str(Path.home() / "Applications/LibreOffice.app/Contents/MacOS"),
+        "/usr/lib/libreoffice/program", "/opt/libreoffice/program",
+        "/snap/bin",
+    ]
+
+# Routes that cannot run without Pandoc. The others (PDF, slides,
+# spreadsheets, text) read the file themselves, so a machine without Pandoc
+# can still convert those, and is told per file about anything it cannot.
+NEEDS_PANDOC = {"pandoc", "office", "asciidoc", "biblio"}
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\r(?!\n)")
 EM_DASH_RE = re.compile(r"\s*(?:—|–)\s*")  # noqa: RUF001 - em and en dash
@@ -182,14 +238,15 @@ def sha256_of(path: Path) -> str:
 
 def find_tool(binary: str) -> str | None:
     """Absolute path of a tool, searching PATH and the usual Mac locations."""
-    found = shutil.which(binary)
-    if found:
-        return found
+    # Our own folders come before PATH: a Pandoc the app installed is the one
+    # the app tested, and beats whatever an old Homebrew left behind.
+    names = [binary, binary + ".exe"] if IS_WINDOWS else [binary]
     for directory in EXTRA_TOOL_DIRS:
-        candidate = Path(directory) / binary
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
-    return None
+        for name in names:
+            candidate = Path(directory) / name
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+    return shutil.which(binary)
 
 
 def have(binary: str) -> bool:
@@ -220,7 +277,8 @@ def read_text(path: Path) -> str:
 def sniff_route(path: Path) -> tuple[str, str] | None:
     """Best-effort routing for files whose extension says nothing."""
     try:
-        head = path.open("rb").read(4096)
+        with path.open("rb") as handle:
+            head = handle.read(4096)
     except OSError:
         return None
     if head.startswith(b"%PDF"):
@@ -307,7 +365,9 @@ def libreoffice_convert(args: argparse.Namespace, src: Path, target: str,
     profile = workdir / "loprofile"
     out = workdir / "lo"
     out.mkdir(parents=True, exist_ok=True)
-    run([binary, f"-env:UserInstallation=file://{profile}", "--headless",
+    # as_uri() rather than "file://" + path: a Windows path needs the
+    # file:///C:/ form, and a space in any path needs escaping.
+    run([binary, f"-env:UserInstallation={profile.as_uri()}", "--headless",
          "--norestore", "--convert-to", target, "--outdir", str(out), str(src)],
         timeout=args.timeout)
     produced = sorted(p for p in out.iterdir() if p.is_file())
@@ -638,6 +698,12 @@ def convert_pdf(args: argparse.Namespace, src: Path, job: Job,
         except ConversionError as exc:
             errors.append(str(exc))
             body = ""
+        except Exception as exc:  # noqa: BLE001 - one engine failing is not the file failing
+            # PyMuPDF raises its own exceptions on an encrypted or damaged
+            # PDF. The next engine may still read it, so try it before giving
+            # up on the file.
+            errors.append(f"{engine}: {type(exc).__name__}: {exc}")
+            body = ""
         if body.strip():
             job.warnings.append(f"pdf engine: {engine}")
             break
@@ -766,6 +832,51 @@ def normalize(body: str, args: argparse.Namespace) -> str:
     return body.strip() + "\n"
 
 
+def convert_body(job: Job, args: argparse.Namespace,
+                 media_dir: Path | None) -> str:
+    """Run the right engine for one job and return the finished Markdown.
+
+    Raises ConversionError (or whatever the engine raised) rather than
+    recording it: convert_one turns that into a report line for a batch, and
+    --stdout turns it into an exit code.
+    """
+    src = job.source
+    with tempfile.TemporaryDirectory(prefix="doc2gfm-") as tmp:
+        workdir = Path(tmp)
+        if job.route == "pandoc":
+            body = pandoc_gfm(args, src, job.arg, media_dir, job)
+        elif job.route == "office":
+            body = convert_office(args, src, job.arg, media_dir, job, workdir)
+        elif job.route == "asciidoc":
+            body = convert_asciidoc(args, src, media_dir, job, workdir)
+        elif job.route == "pptx":
+            body = convert_pptx(args, src, media_dir, job)
+        elif job.route == "sheet":
+            body = convert_sheet(args, src, job, workdir)
+        elif job.route == "biblio":
+            body = convert_biblio(args, src, job.arg, job)
+        elif job.route == "pdf":
+            body = convert_pdf(args, src, job, workdir)
+        elif job.route == "ansi":
+            body = convert_ansi(src, job)
+        elif job.route == "text":
+            body = convert_text(src, job.arg, job)
+        else:
+            raise ConversionError(f"unknown route {job.route}")
+
+    body = normalize(body, args)
+    if media_dir is not None and media_dir.exists():
+        # Pandoc writes the absolute media path into every image link. Make
+        # them relative, whichever separator this platform used.
+        for absolute in {str(media_dir), media_dir.as_posix()}:
+            body = body.replace(absolute + "/", media_dir.name + "/")
+            body = body.replace(absolute + "\\", media_dir.name + "/")
+            body = body.replace(absolute, media_dir.name)
+    if not body.strip():
+        raise ConversionError("conversion produced an empty document")
+    return body
+
+
 def convert_one(job: Job, args: argparse.Namespace) -> Job:
     src = job.source
     try:
@@ -791,35 +902,7 @@ def convert_one(job: Job, args: argparse.Namespace) -> Job:
             media_dir = job.dest.with_suffix("").with_name(
                 job.dest.with_suffix("").name + ".media")
 
-        with tempfile.TemporaryDirectory(prefix="doc2gfm-") as tmp:
-            workdir = Path(tmp)
-            if job.route == "pandoc":
-                body = pandoc_gfm(args, src, job.arg, media_dir, job)
-            elif job.route == "office":
-                body = convert_office(args, src, job.arg, media_dir, job, workdir)
-            elif job.route == "asciidoc":
-                body = convert_asciidoc(args, src, media_dir, job, workdir)
-            elif job.route == "pptx":
-                body = convert_pptx(args, src, media_dir, job)
-            elif job.route == "sheet":
-                body = convert_sheet(args, src, job, workdir)
-            elif job.route == "biblio":
-                body = convert_biblio(args, src, job.arg, job)
-            elif job.route == "pdf":
-                body = convert_pdf(args, src, job, workdir)
-            elif job.route == "ansi":
-                body = convert_ansi(src, job)
-            elif job.route == "text":
-                body = convert_text(src, job.arg, job)
-            else:
-                raise ConversionError(f"unknown route {job.route}")
-
-        body = normalize(body, args)
-        if media_dir is not None and media_dir.exists():
-            rewritten = body.replace(str(media_dir) + "/", media_dir.name + "/")
-            body = rewritten.replace(str(media_dir), media_dir.name)
-        if not body.strip():
-            raise ConversionError("conversion produced an empty document")
+        body = convert_body(job, args, media_dir)
 
         job.dest.parent.mkdir(parents=True, exist_ok=True)
         job.dest.write_text(front_matter(job, args) + body, encoding="utf-8")
@@ -964,8 +1047,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                     "Markdown, one file or a whole folder tree at a time.")
     p.add_argument("inputs", nargs="+", type=Path,
                    help="files and/or folders to convert")
-    p.add_argument("-o", "--out", type=Path, required=True,
+    p.add_argument("-o", "--out", type=Path,
                    help="output folder (created if missing)")
+    p.add_argument("--stdout", action="store_true",
+                   help="convert one file and print the Markdown instead of "
+                        "writing anything: no output folder, no report, no "
+                        "media. What an AI assistant wants before reading a "
+                        "document.")
     p.add_argument("-j", "--jobs", type=int, default=min(8, (os.cpu_count() or 4)),
                    help="parallel conversions (default: %(default)s)")
     p.add_argument("--force", action="store_true",
@@ -985,8 +1073,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--media", dest="media", action="store_true", default=True,
                    help="extract embedded images next to the markdown (default)")
     p.add_argument("--no-media", dest="media", action="store_false")
+    # None until resolved below: on by default for files written to disk,
+    # off by default for --stdout, where the reader already knows the source.
     p.add_argument("--front-matter", dest="front_matter", action="store_true",
-                   default=True, help="write YAML front matter (default)")
+                   default=None, help="write YAML front matter (default when "
+                                      "writing files)")
     p.add_argument("--no-front-matter", dest="front_matter", action="store_false")
     p.add_argument("--wrap", choices=("none", "auto", "preserve"), default="none")
     p.add_argument("--columns", type=int, default=88)
@@ -1012,21 +1103,79 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("-q", "--quiet", action="store_true")
     p.add_argument("--version", action="version", version=f"doc2gfm {VERSION}")
     args = p.parse_args(argv)
-    args.out = args.out.resolve()
+    if args.stdout:
+        if len(args.inputs) != 1 or not args.inputs[0].is_file():
+            p.error("--stdout converts exactly one file")
+        if args.out is not None:
+            p.error("--stdout writes nothing, so -o has no meaning with it")
+        args.media = False       # nowhere to put images that is not a folder
+    elif args.out is None:
+        p.error("the following arguments are required: -o/--out "
+                "(or --stdout to print one file)")
+    if args.front_matter is None:
+        args.front_matter = not args.stdout
     args.inputs = [i.resolve() for i in args.inputs]
-    args.report = args.report or args.out / "_conversion-report.md"
-    args.manifest = args.manifest or args.out / "_conversion-manifest.json"
     args.front_matter_base = os.path.commonpath(
         [str(i if i.is_dir() else i.parent) for i in args.inputs])
+    if args.stdout:
+        return args
+    args.out = args.out.resolve()
+    args.report = args.report or args.out / "_conversion-report.md"
+    args.manifest = args.manifest or args.out / "_conversion-manifest.json"
     return args
+
+
+def pandoc_missing_message() -> str:
+    return ("pandoc is not installed. Run scripts/setup.sh, or open the "
+            "Document to Markdown app once and let it set itself up.")
+
+
+def convert_file_to_markdown(path: Path, *, ocr: bool = False,
+                             with_front_matter: bool = False,
+                             no_em_dash: bool = False,
+                             timeout: int = 600) -> str:
+    """Convert one file and return the Markdown, writing nothing to disk.
+
+    This is what --stdout and the MCP server call. It raises ConversionError
+    with a plain-language reason when the file cannot be read.
+    """
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise ConversionError(f"no such file: {source}")
+    route = route_for(source)
+    if route is None:
+        raise ConversionError(
+            f"{source.name} is not a document this converter reads "
+            "(images, archives and programs are left alone)")
+    if route[0] in NEEDS_PANDOC and not have("pandoc"):
+        raise ConversionError(pandoc_missing_message())
+    argv = [str(source), "--stdout", f"--timeout={timeout}"]
+    if ocr:
+        argv.append("--ocr")
+    if no_em_dash:
+        argv.append("--no-em-dash")
+    # Said either way: parse_args turns front matter off for --stdout when
+    # nothing is said, and the caller has said.
+    argv.append("--front-matter" if with_front_matter else "--no-front-matter")
+    args = parse_args(argv)
+    job = Job(source, source.with_suffix(".md"), route[0], route[1])
+    job.sha256 = sha256_of(source)
+    try:
+        body = convert_body(job, args, None)
+    except subprocess.TimeoutExpired as exc:
+        raise ConversionError(f"timed out after {timeout}s") from exc
+    return front_matter(job, args) + body
 
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
-    if not have("pandoc"):
-        print("error: pandoc is not installed. Run scripts/setup.sh first.",
-              file=sys.stderr)
-        return 2
+    # A file name the terminal's encoding cannot show must not crash the run
+    # that is converting it. Replace what cannot be printed and carry on.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+    if args.stdout:
+        return print_one(args)
     for item in args.inputs:
         if item.is_dir() and args.out.is_relative_to(item):
             print(f"error: output folder {args.out} sits inside input {item}; "
@@ -1034,10 +1183,23 @@ def main(argv: list[str]) -> int:
             return 2
 
     jobs, skipped = plan(args.inputs, args)
+    # A Markdown file chosen on its own, with the output folder set to the
+    # folder it is in, would be written over itself. The folder check above
+    # cannot see that case, because the input is a file, so it is checked
+    # per job here.
+    for job in jobs:
+        if job.dest == job.source:
+            print(f"error: {job.source} would be overwritten by its own "
+                  "conversion; choose a different output folder.",
+                  file=sys.stderr)
+            return 2
     if not jobs:
         print("nothing to convert", file=sys.stderr)
         write_report(skipped, args)
         return 1
+    if any(job.route in NEEDS_PANDOC for job in jobs) and not have("pandoc"):
+        print(f"error: {pandoc_missing_message()}", file=sys.stderr)
+        return 2
 
     done: list[Job] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
@@ -1065,6 +1227,29 @@ def main(argv: list[str]) -> int:
         print(f"report:   {args.report}")
         print(f"manifest: {args.manifest}")
     return 1 if failed else 0
+
+
+def print_one(args: argparse.Namespace) -> int:
+    """--stdout: one file in, Markdown out, nothing written anywhere."""
+    source = args.inputs[0]
+    try:
+        body = convert_file_to_markdown(
+            source, ocr=args.ocr, with_front_matter=args.front_matter,
+            no_em_dash=args.no_em_dash, timeout=args.timeout)
+    except ConversionError as exc:
+        print(f"error: {source.name}: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # noqa: BLE001 - say what happened, in one line
+        print(f"error: {source.name}: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+        return 1
+    # Bytes, not text: the reader on the other end of a pipe wants UTF-8
+    # whatever the terminal's locale says, and a Windows console's code page
+    # is the wrong thing to write a document through.
+    sys.stdout.flush()
+    sys.stdout.buffer.write(body.encode("utf-8"))
+    sys.stdout.buffer.flush()
+    return 0
 
 
 if __name__ == "__main__":

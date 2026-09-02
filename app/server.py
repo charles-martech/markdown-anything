@@ -17,6 +17,7 @@ page in the same browser can read that token or drive the converter.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import platform
@@ -43,27 +44,57 @@ ROOT = APP_DIR.parent
 CONVERTER = ROOT / "scripts" / "doc2gfm.py"
 TOKEN = secrets.token_urlsafe(24)
 IS_MAC = platform.system() == "Darwin"
+IS_WINDOWS = platform.system() == "Windows"
+PLATFORM = "mac" if IS_MAC else "windows" if IS_WINDOWS else "linux"
+FILE_MANAGER = {"mac": "Finder", "windows": "File Explorer",
+                "linux": "your file manager"}[PLATFORM]
+
+
+def default_support_dir() -> Path:
+    """The app's own folder on this platform.
+
+    scripts/doc2gfm.py works this out the same way, so that a converter run
+    from a terminal or by an AI assistant finds the engines the app installed.
+    Change one and change the other.
+    """
+    if IS_MAC:
+        return Path.home() / "Library/Application Support/Document to Markdown"
+    if IS_WINDOWS:
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData/Local")
+        return Path(base) / "Document to Markdown"
+    return Path.home() / ".local/share/document-to-markdown"
+
 
 # Everything this app installs for itself lives here, never on the system.
 # Deleting this folder undoes every install the app has ever done.
-_DEFAULT_SUPPORT = (Path.home() / "Library/Application Support/Document to Markdown"
-                    if IS_MAC else Path.home() / ".local/share/document-to-markdown")
 # DOC2MD_HOME relocates everything this app installs and remembers. The server
 # it starts is a separate process, so this has to travel through the
 # environment rather than a module global.
-SUPPORT = Path(os.environ.get("DOC2MD_HOME") or _DEFAULT_SUPPORT)
+SUPPORT = Path(os.environ.get("DOC2MD_HOME") or default_support_dir())
 BIN_DIR = SUPPORT / "bin"
 PYLIB_DIR = SUPPORT / "python"
 # An app launched from Finder inherits a bare PATH (/usr/bin:/bin:/usr/sbin:
 # /sbin), not the PATH from a login shell, so tools installed by Homebrew are
 # invisible unless we go looking. LibreOffice is never on any PATH: it lives
-# inside its own application bundle.
-EXTRA_TOOL_DIRS = [
-    Path("/opt/homebrew/bin"), Path("/usr/local/bin"), Path("/opt/local/bin"),
-    Path("/usr/bin"), Path("/bin"), Path.home() / ".local/bin",
-    Path("/Applications/LibreOffice.app/Contents/MacOS"),
-    Path.home() / "Applications/LibreOffice.app/Contents/MacOS",
-]
+# inside its own application bundle, on every platform.
+if IS_WINDOWS:
+    EXTRA_TOOL_DIRS = []
+    for _base in (os.environ.get("ProgramFiles", r"C:\Program Files"),
+                  os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                  os.environ.get("LOCALAPPDATA", "")):
+        if _base:
+            EXTRA_TOOL_DIRS += [Path(_base) / "Pandoc",
+                                Path(_base) / "LibreOffice" / "program",
+                                Path(_base) / "poppler" / "Library" / "bin"]
+else:
+    EXTRA_TOOL_DIRS = [
+        Path("/opt/homebrew/bin"), Path("/usr/local/bin"), Path("/opt/local/bin"),
+        Path("/usr/bin"), Path("/bin"), Path.home() / ".local/bin",
+        Path("/Applications/LibreOffice.app/Contents/MacOS"),
+        Path.home() / "Applications/LibreOffice.app/Contents/MacOS",
+        Path("/usr/lib/libreoffice/program"), Path("/opt/libreoffice/program"),
+        Path("/snap/bin"),
+    ]
 PANDOC_RELEASES = "https://api.github.com/repos/jgm/pandoc/releases/latest"
 PANDOC_FALLBACK = "3.1.11"
 LIBREOFFICE_PAGE = "https://www.libreoffice.org/download/download-libreoffice/"
@@ -221,17 +252,18 @@ def watchdog(server: ThreadingHTTPServer) -> None:
 # --------------------------------------------------------------------------
 
 def tool_path(name: str) -> str | None:
-    """Find a binary: our own copy, then PATH, then the usual Mac locations."""
-    own = BIN_DIR / name
-    if own.is_file() and os.access(own, os.X_OK):
-        return str(own)
+    """Find a binary: our own copy, then PATH, then the usual locations."""
+    names = [name, name + ".exe"] if IS_WINDOWS else [name]
+    for candidate in [BIN_DIR / n for n in names]:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
     found = shutil.which(name)
     if found:
         return found
     for directory in EXTRA_TOOL_DIRS:
-        candidate = directory / name
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
+        for candidate in [directory / n for n in names]:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
     return None
 
 
@@ -249,6 +281,10 @@ def child_env() -> dict:
     """Environment for the converter: our bin folder and libraries come first."""
     env = dict(os.environ)
     env["PATH"] = search_path()
+    # The converter prints file names. An app opened from an icon can have no
+    # locale at all, and a name the locale cannot encode must not crash the
+    # run that is converting it.
+    env["PYTHONIOENCODING"] = "utf-8"
     if PYLIB_DIR.is_dir():
         existing = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = (f"{PYLIB_DIR}{os.pathsep}{existing}" if existing
@@ -279,6 +315,63 @@ def osascript(script: str, *arguments: str) -> subprocess.CompletedProcess:
                           capture_output=True, text=True)
 
 
+def powershell_dialog(script: str, prompt: str) -> list[str]:
+    """Run a Windows Forms dialog from PowerShell and return the chosen paths.
+
+    The script is fixed text handed over base64-encoded, so no quoting rule of
+    PowerShell's or cmd's ever applies to it, and the prompt travels in an
+    environment variable rather than inside the script, for the same reason
+    AppleScript gets its text as an argument: nothing from the page is ever
+    part of a program.
+    """
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass",
+             "-EncodedCommand", encoded],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env={**os.environ, "MDA_PROMPT": prompt},
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except OSError:
+        return []
+    if proc.returncode != 0:
+        return []
+    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+
+# Output as UTF-8 so a path with an accent survives the trip; a form that is
+# topmost, so the dialog opens in front of the browser instead of behind it.
+_PS_PRELUDE = (
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
+    "Add-Type -AssemblyName System.Windows.Forms\n"
+    "$owner = New-Object System.Windows.Forms.Form\n"
+    "$owner.TopMost = $true\n")
+_PS_FOLDER = _PS_PRELUDE + (
+    "$d = New-Object System.Windows.Forms.FolderBrowserDialog\n"
+    "$d.Description = $env:MDA_PROMPT\n"
+    "$d.ShowNewFolderButton = $true\n"
+    "if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) "
+    "{ Write-Output $d.SelectedPath }\n")
+_PS_FILES = _PS_PRELUDE + (
+    "$d = New-Object System.Windows.Forms.OpenFileDialog\n"
+    "$d.Title = $env:MDA_PROMPT\n"
+    "$d.Multiselect = $true\n"
+    "$d.Filter = 'All files (*.*)|*.*'\n"
+    "if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) "
+    "{ $d.FileNames | ForEach-Object { Write-Output $_ } }\n")
+
+
+def _linux_dialog(zenity_args: list[str], kdialog_args: list[str]) -> list[str]:
+    for tool, args in (("zenity", zenity_args), ("kdialog", kdialog_args)):
+        if shutil.which(tool):
+            proc = subprocess.run([tool, *args], capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace")
+            if proc.returncode != 0:
+                return []
+            return [line for line in proc.stdout.splitlines() if line.strip()]
+    return []
+
+
 def pick_folder(prompt: str) -> str:
     """Native folder chooser. Returns "" when cancelled or unavailable."""
     prompt = PROMPT_RE.sub(" ", str(prompt))[:120].strip() or "Choose a folder"
@@ -288,14 +381,42 @@ def pick_folder(prompt: str) -> str:
             "  return POSIX path of (choose folder with prompt (item 1 of argv))\n"
             "end run", prompt)
         return proc.stdout.strip().rstrip("/") if proc.returncode == 0 else ""
-    for tool, args in (
-        ("zenity", ["--file-selection", "--directory", f"--title={prompt}"]),
-        ("kdialog", ["--getexistingdirectory", str(Path.home())]),
-    ):
-        if shutil.which(tool):
-            proc = subprocess.run([tool, *args], capture_output=True, text=True)
-            return proc.stdout.strip() if proc.returncode == 0 else ""
-    return ""
+    if IS_WINDOWS:
+        chosen = powershell_dialog(_PS_FOLDER, prompt)
+    else:
+        chosen = _linux_dialog(
+            ["--file-selection", "--directory", f"--title={prompt}"],
+            ["--getexistingdirectory", str(Path.home()), "--title", prompt])
+    return chosen[0].rstrip("/") if chosen else ""
+
+
+def pick_files(prompt: str) -> list[str]:
+    """Native file chooser, several files allowed. [] when cancelled."""
+    prompt = PROMPT_RE.sub(" ", str(prompt))[:120].strip() or "Choose files"
+    if IS_MAC:
+        # `choose file` returns a list of aliases; POSIX path works on one
+        # alias at a time, so they are walked and joined with newlines. A
+        # file name holding a newline is possible on a Mac and not something
+        # anyone has, and the worst case is that one path does not exist.
+        proc = osascript(
+            "on run argv\n"
+            "  set chosen to choose file with prompt (item 1 of argv) "
+            "with multiple selections allowed\n"
+            '  set out to ""\n'
+            "  repeat with f in chosen\n"
+            "    set out to out & POSIX path of f & linefeed\n"
+            "  end repeat\n"
+            "  return out\n"
+            "end run", prompt)
+        if proc.returncode != 0:
+            return []
+        return [line for line in proc.stdout.splitlines() if line.strip()]
+    if IS_WINDOWS:
+        return powershell_dialog(_PS_FILES, prompt)
+    return _linux_dialog(
+        ["--file-selection", "--multiple", "--separator=\n", f"--title={prompt}"],
+        ["--getopenfilename", str(Path.home()), "--multiple", "--separator", "\n",
+         "--title", prompt])
 
 
 BUNDLE_SUFFIXES = {".app", ".pkg", ".command", ".workflow", ".scpt", ".dmg"}
@@ -314,15 +435,23 @@ def reveal(path: str) -> bool:
         target = Path(path).expanduser().resolve(strict=True)
     except OSError:
         return False
-    opener = shutil.which("open" if IS_MAC else "xdg-open")
-    if not opener:
-        return False
     plain_folder = (target.is_dir()
                     and target.suffix.lower() not in BUNDLE_SUFFIXES)
-    if IS_MAC:
-        command = [opener, str(target)] if plain_folder else [opener, "-R", str(target)]
+    if IS_WINDOWS:
+        # Explorer takes "/select,PATH" as one argument. The path came back
+        # from resolve(strict=True), so it exists and, on Windows, cannot
+        # hold a quote; nothing here is a shell.
+        command = (["explorer", str(target)] if plain_folder
+                   else ["explorer", f"/select,{target}"])
     else:
-        command = [opener, str(target if plain_folder else target.parent)]
+        opener = shutil.which("open" if IS_MAC else "xdg-open")
+        if not opener:
+            return False
+        if IS_MAC:
+            command = ([opener, str(target)] if plain_folder
+                       else [opener, "-R", str(target)])
+        else:
+            command = [opener, str(target if plain_folder else target.parent)]
     subprocess.Popen(command,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return True
@@ -356,20 +485,51 @@ def engine_status() -> list[dict]:
     ]
 
 
-def count_candidates(folder: str) -> dict:
-    """Rough preview of what a folder holds, for the confirmation line."""
-    root = Path(folder).expanduser()
-    if not root.is_dir():
-        return {"files": 0, "kinds": []}
+PREVIEW_LIMIT = 50_000
+
+
+def count_candidates(paths: list[str]) -> dict:
+    """Rough preview of what a choice holds, for the confirmation line.
+
+    Files are counted as themselves; folders are walked the way the converter
+    walks them, leaving out dot-folders and the two folders nobody means. A
+    very large tree stops being counted at PREVIEW_LIMIT so that choosing a
+    home folder does not leave the page waiting on a full walk of it.
+    """
     kinds: dict[str, int] = {}
     total = 0
-    for path in root.rglob("*"):
-        if path.is_file() and not path.name.startswith("."):
+    capped = False
+
+    def note(path: Path) -> None:
+        ext = path.suffix.lower() or "(no extension)"
+        kinds[ext] = kinds.get(ext, 0) + 1
+
+    for raw in paths:
+        item = Path(raw).expanduser()
+        if item.is_file():
             total += 1
-            kinds[path.suffix.lower() or "(no extension)"] = kinds.get(
-                path.suffix.lower() or "(no extension)", 0) + 1
+            note(item)
+            continue
+        if not item.is_dir():
+            continue
+        for root, dirs, files in os.walk(item):
+            dirs[:] = [d for d in dirs if not d.startswith(".")
+                       and d not in {"node_modules", "__pycache__"}]
+            for name in files:
+                if name.startswith("."):
+                    continue
+                total += 1
+                note(Path(root) / name)
+                if total >= PREVIEW_LIMIT:
+                    capped = True
+                    break
+            if capped:
+                break
+        if capped:
+            break
     top = sorted(kinds.items(), key=lambda kv: -kv[1])[:6]
-    return {"files": total, "kinds": [{"ext": k, "count": v} for k, v in top]}
+    return {"files": total, "capped": capped,
+            "kinds": [{"ext": k, "count": v} for k, v in top]}
 
 
 # --------------------------------------------------------------------------
@@ -460,10 +620,14 @@ def pandoc_asset() -> tuple[str, str]:
     machine = platform.machine().lower()
     if IS_MAC:
         arch = "arm64" if machine in ("arm64", "aarch64") else "x86_64"
-        pattern = re.compile(rf"pandoc-([\d.]+)-{arch}-macOS\.zip$")
+        suffix = f"{arch}-macOS.zip"
+    elif IS_WINDOWS:
+        # Pandoc ships one Windows build; an ARM machine runs it emulated.
+        suffix = "windows-x86_64.zip"
     else:
         arch = "arm64" if machine in ("arm64", "aarch64") else "amd64"
-        pattern = re.compile(rf"pandoc-([\d.]+)-linux-{arch}\.tar\.gz$")
+        suffix = f"linux-{arch}.tar.gz"
+    pattern = re.compile(rf"pandoc-([\d.]+)-{re.escape(suffix)}$")
     try:
         request = urllib.request.Request(  # noqa: S310 - constant https URL
             PANDOC_RELEASES, headers={"Accept": "application/vnd.github+json",
@@ -477,8 +641,7 @@ def pandoc_asset() -> tuple[str, str]:
     except (urllib.error.URLError, ValueError, KeyError, TimeoutError):
         pass  # rate limited or offline: fall back to a known-good version
     version = PANDOC_FALLBACK
-    name = (f"pandoc-{version}-{arch}-macOS.zip" if IS_MAC
-            else f"pandoc-{version}-linux-{arch}.tar.gz")
+    name = f"pandoc-{version}-{suffix}"
     return (f"https://github.com/jgm/pandoc/releases/download/{version}/{name}", name)
 
 
@@ -515,22 +678,27 @@ def install_pandoc(run: Run) -> bool:
         except (zipfile.BadZipFile, tarfile.TarError, OSError) as exc:
             _say(run, f"The download was damaged: {exc}", "fail")
             return False
-        found = next((p for p in target.rglob("pandoc")
-                      if p.is_file() and p.parent.name == "bin"), None)
+        # The Mac and Linux archives keep the program in bin/; the Windows
+        # one keeps pandoc.exe at the top of its folder.
+        program = "pandoc.exe" if IS_WINDOWS else "pandoc"
+        found = next((p for p in target.rglob(program)
+                      if p.is_file() and (IS_WINDOWS or p.parent.name == "bin")),
+                     None)
         if found is None:
             _say(run, "That Pandoc build did not contain the program.", "fail")
             return False
-        destination = BIN_DIR / "pandoc"
+        destination = BIN_DIR / program
         shutil.copy2(found, destination)
         destination.chmod(0o755)
     if IS_MAC:
         # Downloads carry a quarantine flag; clear it on the file we placed.
-        subprocess.run(["xattr", "-d", "com.apple.quarantine", str(BIN_DIR / "pandoc")],
+        subprocess.run(["xattr", "-d", "com.apple.quarantine", str(destination)],
                        capture_output=True)
-    version = subprocess.run([str(BIN_DIR / "pandoc"), "--version"],
+    version = subprocess.run([str(destination), "--version"],
                              capture_output=True, text=True)
     if version.returncode != 0:
-        _say(run, "Pandoc was installed but will not run on this Mac.", "fail")
+        _say(run, "Pandoc was installed but will not run on this computer.",
+             "fail")
         return False
     _say(run, f"Installed {version.stdout.splitlines()[0]}", "ok")
     return True
@@ -623,8 +791,15 @@ def settings_for_page() -> dict:
     """
     saved = read_settings()
     auto = saved.get("autoCheck")
-    due = (time.time() - float(saved.get("lastCheck") or 0)) > CHECK_INTERVAL
+    try:
+        last = float(saved.get("lastCheck") or 0)
+    except (TypeError, ValueError):
+        last = 0.0
+    due = (time.time() - last) > CHECK_INTERVAL
     return {"version": VERSION,
+            "platform": PLATFORM,
+            "fileManager": FILE_MANAGER,
+            "examplePath": str(Path.home() / "Documents" / "report.pdf"),
             "autoCheck": auto if isinstance(auto, bool) else None,
             "checkNow": auto is True and due}
 
@@ -788,7 +963,7 @@ def run_update(run: Run) -> bool:
         _say(run, "Checking that it runs...")
         started, detail = preflight(root)
         if not started:
-            _say(run, f"{tag} did not start on this Mac, so nothing was "
+            _say(run, f"{tag} did not start on this computer, so nothing was "
                       f"changed: {detail}", "fail")
             return False
         try:
@@ -812,28 +987,46 @@ def read_stamp_from(root: Path, name: str, default: str) -> str:
 # Running a conversion
 # --------------------------------------------------------------------------
 
+def requested_sources(options: dict) -> list[Path]:
+    """The files and folders the page asked for, existing ones only.
+
+    The page sends `sources`, a list; `source`, a single string, is what it
+    sent before files could be chosen one at a time, and still works.
+    """
+    raw = options.get("sources")
+    if not isinstance(raw, list):
+        raw = [options.get("source")]
+    sources: list[Path] = []
+    for item in raw:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        path = Path(item).expanduser()
+        if path.exists() and path not in sources:
+            sources.append(path)
+    return sources
+
+
 def start_conversion(options: dict) -> dict:
-    raw_source = options.get("source")
-    if not isinstance(raw_source, str) or not raw_source.strip():
-        return {"ok": False, "error": "Choose a folder or file to convert."}
-    source = Path(raw_source).expanduser()
-    if not source.exists():
-        return {"ok": False, "error": "Choose a folder or file to convert."}
+    sources = requested_sources(options)
+    if not sources:
+        return {"ok": False, "error": "Choose a folder or some files to convert."}
     output = options.get("output")
     if not isinstance(output, str) or not output.strip():
-        output = default_output(str(source))
+        output = default_output([str(s) for s in sources])
     output_path = Path(output).expanduser()
-    if source.is_dir() and (output_path == source
-                            or str(output_path).startswith(str(source) + os.sep)):
-        return {"ok": False,
-                "error": "The output folder cannot sit inside the folder being "
-                         "converted. Pick a different destination."}
+    for source in sources:
+        if source.is_dir() and (output_path == source
+                                or str(output_path).startswith(str(source) + os.sep)):
+            return {"ok": False,
+                    "error": "The output folder cannot sit inside the folder "
+                             "being converted. Pick a different destination."}
     with RUN.lock:
         if RUN.process is not None and RUN.process.poll() is None:
             return {"ok": False, "error": "A conversion is already running."}
 
-    command = [sys.executable, "-u", str(CONVERTER), str(source),
-               "-o", str(output_path)]
+    # Options first and sources after "--", so a file whose name starts with
+    # a dash is a file and never a flag.
+    command = [sys.executable, "-u", str(CONVERTER), "-o", str(output_path)]
     if options.get("flat"):
         command.append("--flat")
     if options.get("force"):
@@ -852,6 +1045,7 @@ def start_conversion(options: dict) -> dict:
         # anyone has, and has no business becoming part of a command line.
         if cleaned and re.fullmatch(r"[a-z0-9]{1,16}", cleaned):
             command += ["--include", cleaned]
+    command += ["--", *[str(source) for source in sources]]
 
     RUN.reset(str(output_path))
     thread = threading.Thread(target=_run, args=(command,), daemon=True)
@@ -863,6 +1057,7 @@ def _run(command: list[str]) -> None:
     try:
         process = subprocess.Popen(command, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, text=True,
+                                   encoding="utf-8", errors="replace",
                                    bufsize=1, env=child_env())
     except OSError as exc:
         with RUN.lock:
@@ -896,10 +1091,44 @@ def cancel() -> None:
         process.terminate()
 
 
-def default_output(source: str) -> str:
-    path = Path(source).expanduser()
-    base = path if path.is_dir() else path.parent
+def default_output(sources: list[str]) -> str:
+    """Where the Markdown goes when the person has not said.
+
+    A folder becomes a sibling named after it: `Reports` -> `Reports-markdown`.
+    A file, or several, becomes that same sibling of the folder they are in,
+    so converting one file today and the whole folder next month lands in the
+    same tree, with the file already done. The only exceptions are folders
+    that have no sensible sibling — the home folder, or a root — which get a
+    `Markdown` folder inside them instead.
+    """
+    items = [Path(raw).expanduser() for raw in sources if raw]
+    if not items:
+        return ""
+    if len(items) == 1 and items[0].is_dir():
+        base = items[0]
+    else:
+        base = Path(os.path.commonpath(
+            [str(item if item.is_dir() else item.parent) for item in items]))
+    home = Path.home()
+    if base in (home, home.parent) or base.parent == base:
+        return str(base / "Markdown")
     return str(base.parent / f"{base.name}-markdown")
+
+
+def describe_sources(paths: list[str]) -> dict:
+    """What the page shows once something has been chosen.
+
+    `path` and `paths` say what; `files` and `kinds` say how much; and
+    `suggestedOutput` is where it would go. An empty choice (the dialog was
+    cancelled) is an empty answer, not an error.
+    """
+    paths = [p for p in paths if p]
+    result: dict = {"path": paths[0] if paths else "", "paths": paths}
+    if paths:
+        result.update(count_candidates(paths))
+        result["suggestedOutput"] = default_output(paths)
+        result["isFolder"] = len(paths) == 1 and Path(paths[0]).is_dir()
+    return result
 
 
 def read_report() -> dict:
@@ -909,6 +1138,37 @@ def read_report() -> dict:
     if not report.exists():
         return {"report": ""}
     return {"report": report.read_text(encoding="utf-8")[:200_000]}
+
+
+def manifest_outputs(output_dir: str) -> list[dict]:
+    """The Markdown files the last run produced, from the converter's manifest.
+
+    The page uses this to offer the one file that was just converted rather
+    than the folder around it. Anything odd in the file means an empty list,
+    never an error: it is a convenience, not the result.
+    """
+    if not output_dir:
+        return []
+    try:
+        data = json.loads((Path(output_dir) / "_conversion-manifest.json")
+                          .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    files = data.get("files") if isinstance(data, dict) else None
+    outputs = []
+    for entry in files if isinstance(files, list) else []:
+        if (isinstance(entry, dict) and entry.get("output")
+                and entry.get("status") in ("converted", "unchanged")):
+            outputs.append({"source": str(entry.get("source", "")),
+                            "output": str(entry["output"])})
+    return outputs[:500]
+
+
+def conversion_status(cursor: int) -> dict:
+    state = RUN.snapshot(cursor)
+    if state["finished"]:
+        state["outputs"] = manifest_outputs(state["outputDir"])
+    return state
 
 
 # --------------------------------------------------------------------------
@@ -1026,7 +1286,7 @@ class Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/install-status":
             self._send(INSTALL.snapshot(self._cursor(query)))
         elif parsed.path == "/api/status":
-            self._send(RUN.snapshot(self._cursor(query)))
+            self._send(conversion_status(self._cursor(query)))
         elif parsed.path == "/api/report":
             self._send(read_report())
         elif parsed.path == "/api/settings":
@@ -1060,21 +1320,19 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict):
             payload = {}
         if parsed.path == "/api/pick":
-            folder = pick_folder(payload.get("prompt", "Choose a folder"))
-            result = {"path": folder}
-            if folder:
-                result.update(count_candidates(folder))
-                result["suggestedOutput"] = default_output(folder)
-            self._send(result)
+            if payload.get("kind") == "files":
+                chosen = pick_files(payload.get("prompt", "Choose files"))
+            else:
+                folder = pick_folder(payload.get("prompt", "Choose a folder"))
+                chosen = [folder] if folder else []
+            self._send(describe_sources(chosen))
         elif parsed.path == "/api/inspect":
-            folder = payload.get("path", "")
-            expanded = (str(Path(folder).expanduser())
-                        if isinstance(folder, str) and folder else "")
-            result = {"path": expanded, "exists": bool(expanded)
-                      and Path(expanded).exists()}
-            if result["exists"]:
-                result.update(count_candidates(expanded))
-                result["suggestedOutput"] = default_output(expanded)
+            typed = payload.get("path", "")
+            expanded = (str(Path(typed).expanduser())
+                        if isinstance(typed, str) and typed.strip() else "")
+            exists = bool(expanded) and Path(expanded).exists()
+            result = describe_sources([expanded] if exists else [])
+            result["exists"] = exists
             self._send(result)
         elif parsed.path == "/api/install":
             self._send(start_install())
@@ -1147,10 +1405,29 @@ def launch() -> int:
 
     private_dir(SUPPORT)
     log = SUPPORT / "log.txt"
+    # An update installs a newer copy of the app's files in the support
+    # folder. On a Mac the bundle's launcher already prefers it; on Windows
+    # and Linux the shortcut points at the installed copy, so the preference
+    # is made here, and the shipped copy starts the updated one.
+    server_script = Path(__file__).resolve()
+    updated = PAYLOAD_DIR / "app" / "server.py"
+    if (server_script != updated and updated.is_file()
+            and (PAYLOAD_DIR / "scripts" / "doc2gfm.py").is_file()):
+        server_script = updated
+    detach: dict = {"start_new_session": True}
+    if IS_WINDOWS:
+        # No console of its own, and not tied to the one this was started
+        # from, so closing a terminal never takes the app with it.
+        detach = {"creationflags": (getattr(subprocess, "DETACHED_PROCESS", 0)
+                                    | getattr(subprocess,
+                                              "CREATE_NEW_PROCESS_GROUP", 0))}
     with log.open("ab") as handle:
-        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--serve"],
+        # cwd is the support folder, not the app's own: on Windows a folder
+        # that is some process's working directory cannot be renamed, and an
+        # update renames the folder the running app came from.
+        subprocess.Popen([sys.executable, str(server_script), "--serve"],
                          stdout=handle, stderr=handle, stdin=subprocess.DEVNULL,
-                         start_new_session=True, cwd=str(ROOT))
+                         cwd=str(SUPPORT), **detach)
 
     for _ in range(100):  # up to ten seconds for the server to claim a port
         time.sleep(0.1)
@@ -1164,14 +1441,27 @@ def launch() -> int:
 
 
 def _dialog(message: str) -> None:
+    """Tell the person something when there may be no terminal to tell."""
     if IS_MAC:
         osascript('on run argv\n'
                   '  display dialog (item 1 of argv) buttons {"OK"} '
                   'default button 1 with icon caution '
                   'with title "Document to Markdown"\n'
                   'end run', message)
-    else:
-        print(message, file=sys.stderr)
+        return
+    if IS_WINDOWS:
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(  # type: ignore[attr-defined]
+                None, message, "Document to Markdown", 0x30)
+            return
+        except (AttributeError, OSError):
+            pass
+    elif shutil.which("zenity"):
+        subprocess.run(["zenity", "--error", "--title=Document to Markdown",
+                        f"--text={message}"], capture_output=True)
+        return
+    print(message, file=sys.stderr)
 
 
 def selftest() -> int:
