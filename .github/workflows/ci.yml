@@ -70,6 +70,7 @@ jobs:
           test -x "$APP/Contents/MacOS/launcher"
           test -f "$APP/Contents/Resources/app/server.py"
           test -f "$APP/Contents/Resources/scripts/doc2gfm.py"
+          test -f "$APP/Contents/Resources/scripts/mcp_server.py"
           plutil -lint "$APP/Contents/Info.plist"
       - name: The server starts, answers, and stops
         run: |
@@ -92,3 +93,83 @@ jobs:
           TOKEN=$(python3 -c "import json,os;print(json.load(open(os.environ['DOC2MD_HOME']+'/instance.json'))['token'])")
           curl -fsS "http://127.0.0.1:$PORT/api/ping?token=$TOKEN"
           curl -fsS -X POST "http://127.0.0.1:$PORT/api/quit?token=$TOKEN"
+
+  linux-app:
+    name: Install the Linux app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install into a throwaway home
+        run: |
+          export HOME="$RUNNER_TEMP/home"
+          mkdir -p "$HOME/Desktop"
+          MDA_NO_OPEN=1 bash install.sh
+          BUNDLE="$HOME/.local/share/document-to-markdown/bundle"
+          test -f "$BUNDLE/app/server.py"
+          test -f "$BUNDLE/scripts/doc2gfm.py"
+          test -f "$BUNDLE/scripts/mcp_server.py"
+          test -f "$HOME/.local/share/applications/document-to-markdown.desktop"
+          test -x "$HOME/Desktop/document-to-markdown.desktop"
+          grep -q '^Exec=.*server.py"$' "$HOME/.local/share/applications/document-to-markdown.desktop"
+          DOC2MD_HOME="$HOME/.local/share/document-to-markdown" \
+            python3 "$BUNDLE/app/server.py" --selftest
+      - name: Installing again over the top is fine
+        run: |
+          export HOME="$RUNNER_TEMP/home"
+          MDA_NO_OPEN=1 bash install.sh
+
+  windows:
+    name: Test on Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Unit tests
+        # Pandoc is deliberately absent: the tests must pass on a Windows
+        # machine with nothing installed, which is what a new user has.
+        run: python -m unittest discover -s tests -v
+      - name: The converter reads a document without Pandoc
+        shell: pwsh
+        run: |
+          Set-Content -Path (Join-Path $env:RUNNER_TEMP "note.txt") -Value "hello from windows"
+          $out = python scripts/doc2gfm.py (Join-Path $env:RUNNER_TEMP "note.txt") --stdout
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ("$out" -notmatch "hello from windows") { throw "unexpected output: $out" }
+      - name: The installer parses, and installs into a throwaway folder
+        shell: pwsh
+        run: |
+          $null = [scriptblock]::Create((Get-Content -Raw windows\install.ps1))
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP "appdata"
+          New-Item -ItemType Directory -Path $env:LOCALAPPDATA -Force | Out-Null
+          $env:MDA_NO_OPEN = "1"
+          powershell -NoProfile -ExecutionPolicy Bypass -File windows\install.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $bundle = Join-Path $env:LOCALAPPDATA "Document to Markdown\bundle"
+          foreach ($f in @("app\server.py", "app\index.html", "scripts\doc2gfm.py", "scripts\mcp_server.py", "VERSION", "icon.ico")) {
+            if (-not (Test-Path (Join-Path $bundle $f))) { throw "missing $f" }
+          }
+          if (-not (Test-Path (Join-Path ([Environment]::GetFolderPath("Desktop")) "Document to Markdown.lnk"))) { throw "no Desktop shortcut" }
+          $env:DOC2MD_HOME = Join-Path $env:LOCALAPPDATA "Document to Markdown"
+          python (Join-Path $bundle "app\server.py") --selftest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: The server starts, answers, and stops
+        shell: pwsh
+        run: |
+          $env:DOC2MD_HOME = Join-Path $env:RUNNER_TEMP "support"
+          $log = Join-Path $env:RUNNER_TEMP "server.log"
+          $proc = Start-Process -FilePath python -ArgumentList "-u", "app/server.py", "--no-browser" `
+            -RedirectStandardOutput $log -RedirectStandardError (Join-Path $env:RUNNER_TEMP "server.err") -PassThru
+          $instance = Join-Path $env:DOC2MD_HOME "instance.json"
+          for ($i = 0; $i -lt 60 -and -not (Test-Path $instance); $i++) { Start-Sleep -Milliseconds 500 }
+          if (-not (Test-Path $instance)) {
+            Get-Content $log -ErrorAction SilentlyContinue
+            Get-Content (Join-Path $env:RUNNER_TEMP "server.err") -ErrorAction SilentlyContinue
+            throw "The server never wrote instance.json"
+          }
+          $saved = Get-Content $instance -Raw | ConvertFrom-Json
+          $base = "http://127.0.0.1:$($saved.port)"
+          Invoke-RestMethod "$base/api/ping?token=$($saved.token)" | Out-Null
+          Invoke-RestMethod -Method Post "$base/api/quit?token=$($saved.token)" -ContentType "application/json" -Body "{}" | Out-Null
+          $proc.WaitForExit(15000) | Out-Null

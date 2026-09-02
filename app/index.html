@@ -97,8 +97,8 @@
 <body>
 <main>
   <h1>Document to Markdown</h1>
-  <p class="sub">Turn a folder of documents into Markdown files. Word, PDF, slides,
-  spreadsheets, web pages, ebooks and more.</p>
+  <p class="sub">Turn a document, or a whole folder of them, into Markdown. Word, PDF,
+  slides, spreadsheets, web pages, ebooks and more.</p>
 
   <section class="card hide" id="setup-card">
     <div class="step"><h2 id="setup-title">One-time setup</h2></div>
@@ -114,16 +114,18 @@
 
   <section class="card">
     <div class="step"><span class="num">1</span><h2>What do you want to convert?</h2></div>
-    <div class="row">
-      <button id="pick-source">Choose folder…</button>
-      <span class="muted" id="source-hint">Everything inside it, including subfolders.</span>
+    <div class="row" style="flex-wrap:wrap">
+      <button id="pick-files">Choose files…</button>
+      <button id="pick-source">Choose a folder…</button>
+      <span class="muted" id="source-hint">One document, a few, or a whole folder
+        including its subfolders.</span>
     </div>
     <div class="path hide" id="source-path"></div>
     <div class="muted hide" id="source-preview" style="margin-top:8px"></div>
     <details style="margin-top:12px">
       <summary>Or type a path</summary>
       <div class="row" style="margin-top:10px">
-        <input type="text" id="source-input" placeholder="/Users/you/Documents/exports" spellcheck="false">
+        <input type="text" id="source-input" placeholder="A file or a folder" spellcheck="false">
         <button id="source-use">Use</button>
       </div>
     </details>
@@ -132,11 +134,11 @@
   <section class="card">
     <div class="step"><span class="num">2</span><h2>Where should the Markdown go?</h2></div>
     <div class="row">
-      <input type="text" id="output-input" placeholder="Choose a source folder first" spellcheck="false">
+      <input type="text" id="output-input" placeholder="Choose what to convert first" spellcheck="false">
       <button id="pick-output">Change…</button>
     </div>
-    <p class="muted" style="margin:10px 0 0">A new folder next to the original. Your
-    files are never changed or moved.</p>
+    <p class="muted" style="margin:10px 0 0" id="output-hint">A new folder next to the
+    original. Your files are never changed or moved.</p>
   </section>
 
   <section class="card">
@@ -181,6 +183,7 @@
     </div>
     <div class="row">
       <button class="primary" id="open-out">Open the folder</button>
+      <button id="open-file" class="hide">Show the Markdown file</button>
       <button id="show-report">See the full report</button>
     </div>
     <pre class="report hide" id="report"></pre>
@@ -222,29 +225,62 @@ const api = (path, body) => fetch(path + (path.includes("?") ? "&" : "?") + "tok
   body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"},
                             body: JSON.stringify(body)}).then(r => r.json());
 const $ = id => document.getElementById(id);
-let source = "", cursor = 0, poller = null;
+// What was chosen: a list of files, or one folder. The page speaks in
+// lists throughout so that one file and forty are the same code path.
+let sources = [], cursor = 0, poller = null;
+// Once the person has typed or chosen an output folder themselves, a new
+// choice of source stops moving it. Until then it follows the source.
+let outputChosen = false;
+const FILE_MANAGER = {name: "your file manager"};
+
+function fileName(path) { return path.split(/[\\/]/).pop(); }
 
 function setSource(data) {
-  if (!data || !data.path) return;
-  source = data.path;
-  $("source-path").textContent = source;
-  $("source-path").classList.remove("hide");
+  if (!data || !data.paths || !data.paths.length) return;
+  sources = data.paths;
+  const box = $("source-path");
+  if (sources.length === 1) {
+    box.textContent = sources[0];
+  } else {
+    const shown = sources.slice(0, 5).map(fileName).join(", ");
+    box.textContent = sources.length > 5
+      ? `${shown}, and ${sources.length - 5} more`
+      : shown;
+    box.title = sources.join("\n");
+  }
+  box.classList.remove("hide");
   if (typeof data.files === "number") {
     const kinds = (data.kinds || []).map(k => `${k.count} ${k.ext}`).join(", ");
-    $("source-preview").textContent =
-      `${data.files} file${data.files === 1 ? "" : "s"} inside` + (kinds ? `: ${kinds}` : "");
+    const count = data.capped ? `${data.files}+ files` :
+      `${data.files} file${data.files === 1 ? "" : "s"}`;
+    $("source-preview").textContent = data.isFolder
+      ? `${count} inside` + (kinds ? `: ${kinds}` : "")
+      : (sources.length === 1 ? `1 file: ${kinds}` : `${count}: ${kinds}`);
     $("source-preview").classList.remove("hide");
   }
-  if (data.suggestedOutput && !$("output-input").value) {
+  if (data.suggestedOutput && (!outputChosen || !$("output-input").value)) {
     $("output-input").value = data.suggestedOutput;
   }
+  $("output-hint").textContent = data.isFolder
+    ? "A new folder next to the original. Your files are never changed or moved."
+    : "A new folder next to the one the file is in, so converting the whole " +
+      "folder later lands in the same place. Your files are never changed or moved.";
+  $("source-hint").textContent = "";
   updateGoState();
 }
 
+$("pick-files").onclick = async () => {
+  const data = await api("/api/pick", {kind: "files", prompt: "Choose the files to convert"});
+  if (!data.paths || !data.paths.length) {
+    $("source-hint").textContent = "Nothing chosen. You can also type a path below.";
+    return;
+  }
+  setSource(data);
+};
 $("pick-source").onclick = async () => {
-  const data = await api("/api/pick", {prompt: "Choose the folder to convert"});
-  if (!data.path) {
-    $("source-hint").textContent = "No folder chosen. You can type a path instead.";
+  const data = await api("/api/pick", {kind: "folder", prompt: "Choose the folder to convert"});
+  if (!data.paths || !data.paths.length) {
+    $("source-hint").textContent = "No folder chosen. You can also type a path below.";
     return;
   }
   setSource(data);
@@ -254,14 +290,15 @@ $("source-use").onclick = async () => {
   if (!data.exists) { $("source-hint").textContent = "That path does not exist."; return; }
   setSource(data);
 };
+$("output-input").oninput = () => { outputChosen = true; };
 $("pick-output").onclick = async () => {
-  const data = await api("/api/pick", {prompt: "Choose where the Markdown goes"});
-  if (data.path) $("output-input").value = data.path;
+  const data = await api("/api/pick", {kind: "folder", prompt: "Choose where the Markdown goes"});
+  if (data.path) { $("output-input").value = data.path; outputChosen = true; }
 };
 
 $("go").onclick = async () => {
   const options = {
-    source,
+    sources,
     output: $("output-input").value.trim(),
     noEmDash: $("opt-emdash").checked,
     media: $("opt-media").checked,
@@ -330,6 +367,15 @@ function showResult(state) {
   }
   $("result-card").classList.remove("hide");
   $("open-out").onclick = () => api("/api/reveal", {path: state.outputDir});
+  // One document in, one Markdown file out: offer the file itself, not
+  // the folder around it, since that is what the person came for.
+  const outputs = state.outputs || [];
+  const single = outputs.length === 1 ? outputs[0] : null;
+  $("open-file").classList.toggle("hide", !single);
+  if (single) {
+    $("open-file").textContent = `Show ${fileName(single.output)} in ${FILE_MANAGER.name}`;
+    $("open-file").onclick = () => api("/api/reveal", {path: single.output});
+  }
   $("show-report").onclick = async () => {
     const data = await api("/api/report");
     $("report").textContent = data.report || "No report was written.";
@@ -374,6 +420,10 @@ let updatePoller = null, updateCursor = 0;
 
 api("/api/settings").then(settings => {
   $("version-line").textContent = "Version " + settings.version;
+  if (settings.fileManager) FILE_MANAGER.name = settings.fileManager;
+  if (settings.examplePath) {
+    $("source-input").placeholder = settings.examplePath + ", or a folder";
+  }
   if (settings.autoCheck === null) {
     askAboutUpdates();          // never been asked; do not decide for them
   } else {
@@ -521,8 +571,8 @@ async function refreshEngines() {
       ? "One-time setup" : "Add support for more file types";
     $("setup-text").textContent = needsPandoc
       ? "This app needs Pandoc to read documents. Click below and it downloads " +
-        "about 30 MB into its own folder. No password, no Terminal, nothing " +
-        "installed on the rest of your Mac."
+        "about 30 MB into its own folder. No password, no terminal, nothing " +
+        "installed on the rest of your computer."
       : "Click below to add: " + fetchable.map(e => e.purpose).join(", ") + ".";
     $("setup-card").classList.remove("hide");
   } else {
@@ -532,7 +582,7 @@ async function refreshEngines() {
 }
 
 function updateGoState() {
-  const ready = pandocReady && source;
+  const ready = pandocReady && sources.length > 0;
   $("go").disabled = !ready;
   $("go-hint").textContent = pandocReady ? "" : "Finish the setup above first.";
 }
@@ -565,7 +615,7 @@ async function pollSetup() {
     await refreshEngines();
     if (pandocReady) {
       $("setup-go").textContent = "Set up again";
-      $("setup-hint").textContent = "Ready. Choose a folder above and convert.";
+      $("setup-hint").textContent = "Ready. Choose files or a folder above and convert.";
     }
   }
 }

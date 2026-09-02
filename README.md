@@ -4,20 +4,23 @@
 
 # Document to Markdown
 
-**Drop a folder in. Get Markdown out.**
-No terminal, no Python, no configuration.
+**Drop a file or a folder in. Get Markdown out.**
+No terminal, no configuration. Mac, Windows and Linux.
 
 [![CI](https://github.com/charles-martech/markdown-anything/actions/workflows/ci.yml/badge.svg)](https://github.com/charles-martech/markdown-anything/actions/workflows/ci.yml)
 [![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 </div>
 
-Turn a folder full of documents into Markdown files, all at once. Word, PDF,
+Turn a document, or a folder full of them, into Markdown. Word, PDF,
 PowerPoint, Excel, web pages, ebooks, wiki exports, LaTeX, man pages and about
-sixty other formats. Point it at a folder and every file inside becomes a `.md`
-file, with the folder structure kept and a report of anything it could not read.
+sixty other formats. Choose one file and get one `.md` file; choose a folder
+and every file inside becomes one, with the folder structure kept and a report
+of anything it could not read.
 
-It runs entirely on your computer. Nothing is uploaded anywhere.
+It runs entirely on your computer. Nothing is uploaded anywhere. It is also
+the cheapest way for an AI assistant to read a document: see
+[Reading documents with AI](#reading-documents-with-ai-assistants) below.
 
 ## Install on a Mac
 
@@ -40,6 +43,35 @@ The install line above runs a script from this repository on your computer,
 which is a thing worth being careful about in general. To read it before you
 run it, [SECURITY.md](SECURITY.md#the-install-line) has the three commands that
 download it, show it to you, and then run it.
+
+## Install on Windows
+
+Python 3.9 or newer needs to be there first: from
+[python.org](https://www.python.org/downloads/windows/) (tick **Add python.exe
+to PATH**) or from the Microsoft Store. Then open PowerShell and paste:
+
+```powershell
+irm https://raw.githubusercontent.com/charles-martech/markdown-anything/main/windows/install.ps1 | iex
+```
+
+That installs the newest release into `%LOCALAPPDATA%\Document to Markdown`,
+puts a **Document to Markdown** shortcut on your Desktop and in the Start Menu,
+and opens it. No administrator rights, nothing installed system-wide. Deleting
+that folder and the two shortcuts removes every trace.
+
+## Install on Linux
+
+Paste this into a terminal once:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/charles-martech/markdown-anything/main/install.sh | bash
+```
+
+That installs the newest release into `~/.local/share/document-to-markdown`,
+adds **Document to Markdown** to your applications menu and your Desktop, and
+opens it. It needs Python 3, which nearly every distribution ships. The file
+and folder dialogs use `zenity` or `kdialog`, whichever your desktop has; with
+neither, the page still takes a typed path.
 
 ## Keeping it up to date
 
@@ -66,10 +98,16 @@ allowed to replace one that already does.
 
 ## Using it
 
-1. **Choose folder.** It counts what is inside so you can see you picked right.
-2. **Check where it goes.** A new folder next to the original, filled in for you.
-   Your files are never changed or moved.
-3. **Convert.** Watch the progress, then click through to the results.
+1. **Choose files, or a folder.** One document, a few at once, or a whole
+   folder including its subfolders. It counts what you picked so you can see
+   it is right.
+2. **Check where it goes.** A new folder next to the original, filled in for
+   you. Your files are never changed or moved. A single file goes where a
+   conversion of its whole folder would put it, so converting one file today
+   and the folder next month lands everything in one place with nothing done
+   twice.
+3. **Convert.** Watch the progress, then click through to the result: the
+   folder, or, when you converted one file, that file.
 
 Options are all optional and written in plain language. The defaults are right
 for almost everyone.
@@ -110,22 +148,48 @@ saved next to each Markdown file with the links already pointing at them.
   the other.
 - **Failures are explained in plain words**, not engine error codes.
 
+## Reading documents with AI assistants
+
+An assistant that opens a PDF directly pays for every page as an image or as
+raw XML: many times the tokens of the words in it, a context window filled in
+a few pages, and the headings and tables lost. Converting to Markdown first,
+on your machine, fixes all three. This repository makes that the default in
+three ways, and all three find the engines the app installed, so setting the
+app up once is enough:
+
+- **Claude Code**: the skill in `.claude/skills/doc-to-gfm/` tells it to
+  convert a document before reading it. Copy that folder to
+  `~/.claude/skills/` to have it in every project.
+- **Claude Desktop, Cursor, Gemini CLI, Codex CLI, ChatGPT, and anything else
+  that speaks MCP**: `scripts/mcp_server.py` is a dependency-free MCP server
+  with a `convert_document` tool that returns the Markdown, in pieces for
+  long documents, and a `convert_folder` tool for a whole folder.
+- **Any assistant that can run a command**:
+  `python3 scripts/doc2gfm.py FILE --stdout` prints the Markdown and writes
+  nothing.
+
+[`docs/ai-agents.md`](docs/ai-agents.md) has the two-line configuration for
+each tool and a paragraph to paste into an `AGENTS.md`.
+
 ## Without the app
 
 The converter is a single Python file with no dependencies of its own:
 
 ```bash
 python3 scripts/doc2gfm.py ~/Documents/exports -o ~/Documents/markdown
+python3 scripts/doc2gfm.py ~/Documents/report.pdf --stdout
 ```
 
-Useful flags: `--flat`, `--include pdf`, `--force`, `--no-media`, `--ocr`,
-`--dry-run`. Run `scripts/setup.sh` to check which engines are installed,
-`scripts/selftest.sh` to convert a fixture of every major format and prove the
-install works, and `python3 -m unittest discover -s tests` for the fast tests,
-which need nothing installed at all.
+Useful flags: `--stdout`, `--flat`, `--include pdf`, `--force`, `--no-media`,
+`--ocr`, `--dry-run`. Run `scripts/setup.sh` to check which engines are
+installed, `scripts/selftest.sh` to convert a fixture of every major format and
+prove the install works, and `python3 -m unittest discover -s tests` for the
+fast tests, which need nothing installed at all.
 
-Linux and Windows (WSL) work the same way; only the one-click app is Mac-only so
-far. A Windows launcher is the most useful thing anyone could contribute.
+It runs the same on macOS, Windows and Linux. PDFs, slides, spreadsheets and
+text formats need no engine at all; Word, HTML, EPUB and most of the rest need
+Pandoc, which the app installs for itself and `scripts/setup.sh` installs for
+a terminal.
 
 ## What it uses
 
@@ -137,13 +201,6 @@ PowerPoint and Excel files are read directly, so those two need nothing extra.
 The app installs Pandoc and the Python readers for you, into its own folder.
 LibreOffice is a large signed installer, so it points you at the official
 download instead of fetching it silently.
-
-## Also a Claude Code skill
-
-`.claude/skills/doc-to-gfm/` makes this available to
-[Claude Code](https://claude.com/claude-code) users: clone the repo and ask
-"convert this folder to markdown", and the agent runs the converter with the
-right flags. Copy that folder to `~/.claude/skills/` to have it everywhere.
 
 ## Your files stay yours
 
@@ -168,37 +225,50 @@ The interface is a page served by a small server on your own machine. It is
 bound to `127.0.0.1` so nothing on your network can reach it, every request
 carries a token created when it starts, and requests naming any other host are
 refused — which is what stops a website you happen to have open from reaching
-in. [SECURITY.md](SECURITY.md) explains this properly, and is where to report
-anything that looks wrong with it.
+in. The MCP server talks to an AI tool through a pipe on this computer and
+opens no network connection of its own. [SECURITY.md](SECURITY.md) explains
+this properly, and is where to report anything that looks wrong with it.
 
 ## If something goes wrong
 
 **The icon does nothing.** The app keeps running in the background after you
 close its tab, and clicking the icon reopens that same page. If nothing opens
 at all, the server has stopped: open the app again, and if it still does
-nothing, look at `~/Library/Application Support/Document to Markdown/log.txt`.
-(Before version 1.0.3 this could also be the app waiting on a name server it
-could not reach. It no longer asks one anything.)
+nothing, look at `log.txt` in the app's folder: on a Mac
+`~/Library/Application Support/Document to Markdown`, on Windows
+`%LOCALAPPDATA%\Document to Markdown`, on Linux
+`~/.local/share/document-to-markdown`. (Before version 1.0.3 this could also
+be the app waiting on a name server it could not reach. It no longer asks one
+anything.)
 
 **It says a tool is missing that you know you installed.** An app opened from
-Finder does not see the same `PATH` as your Terminal, so the app looks in the
-usual places itself: Homebrew, MacPorts, `/usr/local/bin`, and inside
-`LibreOffice.app`. Anything installed somewhere unusual can be pointed at by
-launching the app from a terminal instead:
-`open -a "Document to Markdown"` inherits nothing, but
-`python3 "/Applications/Document to Markdown.app/Contents/Resources/app/server.py"`
-inherits your shell environment.
+an icon does not see the same `PATH` as your terminal, so the app looks in the
+usual places itself: Homebrew, MacPorts, `/usr/local/bin`, `Program Files`,
+and inside the LibreOffice application folder on each system. Anything
+installed somewhere unusual can be pointed at by launching the app from a
+terminal instead, which inherits your shell environment: on a Mac
+`python3 "/Applications/Document to Markdown.app/Contents/Resources/app/server.py"`,
+elsewhere `python3` (or `python`) followed by the path of `app/server.py`
+inside the app's folder.
 
 **Stopping it completely.** Use the "Quit the app" button at the bottom of the
 page. It also stops itself after thirty idle minutes.
 
-**An update went wrong.** Delete the folder
-`~/Library/Application Support/Document to Markdown/current` and open the app
-again. That puts back the version that came with the app. Nothing else is
-affected, and your converted files are somewhere else entirely.
+**On Windows, the file dialog opened behind the browser.** It is a plain
+Windows dialog and some browsers keep themselves on top; look in the taskbar.
+Typing the path into the page works too.
 
-**Removing it.** Delete the app from Applications, the Desktop shortcut, and
-`~/Library/Application Support/Document to Markdown`. Nothing else was touched.
+**An update went wrong.** Delete the `current` folder inside the app's folder
+(the paths above) and open the app again. That puts back the version that came
+with the app. Nothing else is affected, and your converted files are somewhere
+else entirely.
+
+**Removing it.** On a Mac, delete the app from Applications, the Desktop
+shortcut, and `~/Library/Application Support/Document to Markdown`. On Windows,
+delete `%LOCALAPPDATA%\Document to Markdown` and the two shortcuts. On Linux,
+delete `~/.local/share/document-to-markdown`,
+`~/.local/share/applications/document-to-markdown.desktop` and the copy on
+your Desktop. Nothing else was touched.
 
 ## Contributing
 

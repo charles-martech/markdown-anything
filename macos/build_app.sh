@@ -51,7 +51,7 @@ PLIST
 cp "$REPO/macos/icon.icns" "$APP/Contents/Resources/icon.icns"
 mkdir -p "$APP/Contents/Resources/app" "$APP/Contents/Resources/scripts"
 cp "$REPO/app/server.py" "$REPO/app/index.html" "$APP/Contents/Resources/app/"
-cp "$REPO/scripts/doc2gfm.py" "$APP/Contents/Resources/scripts/"
+cp "$REPO/scripts/doc2gfm.py" "$REPO/scripts/mcp_server.py" "$APP/Contents/Resources/scripts/"
 # VERSION lets the running app compare itself against a release. BUNDLE_FORMAT
 # is bumped only when the launcher, Info.plist or icon change — the parts an
 # in-app update cannot replace — so an update carrying a higher number stops

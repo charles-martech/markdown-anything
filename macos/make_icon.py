@@ -1,8 +1,9 @@
-"""Draw the app icon and pack it into macOS .icns and a PNG.
+"""Draw the app icon and pack it into macOS .icns, Windows .ico and a PNG.
 
 Run this only when changing the artwork:  python3 macos/make_icon.py
-It writes macos/icon.icns (used by the app bundle) and docs/icon.png.
-Requires Pillow; nothing at runtime does.
+It writes macos/icon.icns (used by the app bundle), windows/icon.ico (used by
+the Windows shortcuts) and docs/icon.png (used by the README and the Linux
+menu entry). Requires Pillow; nothing at runtime does.
 """
 
 from __future__ import annotations
@@ -103,7 +104,11 @@ def main() -> None:
     draw_document(icon)
     build_icns(icon, HERE / "icon.icns")
     icon.resize((512, 512), Image.LANCZOS).save(HERE.parent / "docs" / "icon.png")
-    print(f"wrote {HERE / 'icon.icns'} and docs/icon.png")
+    ico = HERE.parent / "windows" / "icon.ico"
+    ico.parent.mkdir(exist_ok=True)
+    icon.save(ico, sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64),
+                          (128, 128), (256, 256)])
+    print(f"wrote {HERE / 'icon.icns'}, windows/icon.ico and docs/icon.png")
 
 
 if __name__ == "__main__":
