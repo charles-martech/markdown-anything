@@ -39,6 +39,14 @@ def _load(name: str, path: Path):
     return module
 
 
+# The diagram tests need pymupdf; CI does not install it, so they skip
+# there. Bound here rather than inside each test so it is always a
+# name, never a variable that may or may not have been assigned.
+try:
+    import pymupdf  # type: ignore
+except ImportError:
+    pymupdf = None
+
 server = _load("mda_server", ROOT / "app" / "server.py")
 doc2gfm = _load("mda_doc2gfm", ROOT / "scripts" / "doc2gfm.py")
 
@@ -426,9 +434,7 @@ class ConverterTest(unittest.TestCase):
             ["one"], {}, "", self._pdf_args(pdf_page_marks=True)))
 
     def test_a_pdf_without_vector_art_yields_no_diagram_pages(self) -> None:
-        try:
-            import pymupdf  # type: ignore
-        except ImportError:
+        if pymupdf is None:
             self.skipTest("pymupdf is not installed")
         with tempfile.TemporaryDirectory() as tmp:
             plain = Path(tmp) / "plain.pdf"
@@ -441,9 +447,7 @@ class ConverterTest(unittest.TestCase):
             self.assertFalse((Path(tmp) / "m").exists())
 
     def test_a_pdf_full_of_boxes_is_read_as_a_diagram(self) -> None:
-        try:
-            import pymupdf  # type: ignore
-        except ImportError:
+        if pymupdf is None:
             self.skipTest("pymupdf is not installed")
         with tempfile.TemporaryDirectory() as tmp:
             chart = Path(tmp) / "chart.pdf"
