@@ -221,13 +221,52 @@
 
 <script>
 const TOKEN = "__TOKEN__";
-const api = (path, body) => fetch(path + (path.includes("?") ? "&" : "?") + "token=" + TOKEN,
-  body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"},
-                            body: JSON.stringify(body)}).then(r => r.json());
 const $ = id => document.getElementById(id);
+
+// Every request goes through here. The server behind this page stops itself
+// after thirty idle minutes and is stopped by a reinstall, and a page left
+// open then points at nothing. A refused connection is that, not a bug in
+// what was clicked, so the page says so instead of failing quietly.
+async function api(path, body) {
+  let response;
+  try {
+    response = await fetch(path + (path.includes("?") ? "&" : "?") + "token=" + TOKEN,
+      body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"},
+                                body: JSON.stringify(body)});
+  } catch (error) {
+    serverGone();
+    throw error;
+  }
+  return response.json();
+}
+
+let heartbeat = null;
+
+function serverGone() {
+  for (const timer of [poller, setupPoller, updatePoller, heartbeat]) clearInterval(timer);
+  document.body.innerHTML =
+    '<main><h1>Document to Markdown</h1>' +
+    '<p class="sub">This page has lost the app behind it. The app stops itself ' +
+    'after thirty minutes with nothing to do, and reinstalling stops it too. ' +
+    'Nothing is wrong with your files.</p>' +
+    '<p class="sub"><b>Open Document to Markdown again from your Desktop</b>, ' +
+    'which starts it fresh in a new tab, and close this one.</p></main>';
+}
+
+// While this page is in front of the person, the server is not idle. A ping
+// every five minutes, only while the tab is visible, keeps it alive for as
+// long as the page is actually being looked at, and finds out promptly, when
+// the tab comes back into view, whether the server is still there.
+function keepAlive() {
+  if (document.visibilityState !== "visible") return;
+  api("/api/ping").catch(() => {});
+}
+heartbeat = setInterval(keepAlive, 5 * 60 * 1000);
+document.addEventListener("visibilitychange", keepAlive);
 // What was chosen: a list of files, or one folder. The page speaks in
 // lists throughout so that one file and forty are the same code path.
 let sources = [], cursor = 0, poller = null;
+let setupPoller = null, updatePoller = null;
 // Once the person has typed or chosen an output folder themselves, a new
 // choice of source stops moving it. Until then it follows the source.
 let outputChosen = false;
@@ -416,7 +455,7 @@ $("quit").onclick = async () => {
 
 // Updates. The app asks GitHub nothing unless this button is pressed: no
 // check on launch, no daily ping, nothing in the background.
-let updatePoller = null, updateCursor = 0;
+let updateCursor = 0;
 
 api("/api/settings").then(settings => {
   $("version-line").textContent = "Version " + settings.version;
@@ -479,8 +518,12 @@ async function checkForUpdates(quiet) {
     box.textContent = "Asking GitHub what the newest version is…";
   }
   $("check-update").disabled = true;
-  const data = await api("/api/update-check", {});
-  $("check-update").disabled = false;
+  let data;
+  try {
+    data = await api("/api/update-check", {});
+  } finally {
+    $("check-update").disabled = false;
+  }
   if (!data.ok) {
     if (quiet) return;          // an unasked-for check fails silently
     box.classList.remove("hide", "warn");
@@ -543,7 +586,7 @@ function escapeHtml(text) {
   return text.replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 }
 
-let setupCursor = 0, setupPoller = null, pandocReady = false;
+let setupCursor = 0, pandocReady = false;
 
 async function refreshEngines() {
   const data = await api("/api/engines");

@@ -252,7 +252,13 @@ elsewhere `python3` (or `python`) followed by the path of `app/server.py`
 inside the app's folder.
 
 **Stopping it completely.** Use the "Quit the app" button at the bottom of the
-page. It also stops itself after thirty idle minutes.
+page. It also stops itself after thirty minutes with nothing to do and no page
+looking at it; a page left open in front of you keeps it alive.
+
+**The page says it has lost the app.** The app stopped in the background,
+either after those idle minutes with the tab hidden or because it was
+reinstalled. Open it again from your Desktop, which starts it fresh in a new
+tab, and close the old one. Nothing about your files is affected.
 
 **On Windows, the file dialog opened behind the browser.** It is a plain
 Windows dialog and some browsers keep themselves on top; look in the taskbar.
