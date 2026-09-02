@@ -3,6 +3,19 @@
 Newest first. Dates are when the change landed on `main`, which is also when
 it reached anyone who runs the install line.
 
+## 1.1.1 — 2026-09-02
+
+### Fixed
+
+- **A page left open went dead without saying so.** The app stops itself
+  after thirty idle minutes, and a reinstall stops it too, but the page in the
+  browser did not know: pressing anything afterwards, such as **Check for
+  updates**, left "Asking GitHub what the newest version is…" on screen and a
+  connection error in the console. Now the page pings the app every five
+  minutes while it is visible, so a page someone is looking at keeps the app
+  alive, and the moment a request finds nothing behind the page it says the
+  app has stopped and how to open it again.
+
 ## 1.1.0 — 2026-09-02
 
 ### Added
