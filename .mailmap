@@ -1,0 +1,12 @@
+# Who is answerable for a change, for `git blame`, `git log` and `git shortlog`.
+#
+# Work done here with an assistant is the contributor's work: they set the task,
+# reviewed the result and merged it, and the blame belongs with them rather than
+# with a tool. This file says so for commits already made, without rewriting any
+# history. Commits made from here carry the contributor as author directly.
+#
+# The addresses are GitHub's per-account noreply form. They identify the account
+# without publishing anyone's personal address.
+
+Carlos A. Vazquez <283805441+charles-martech@users.noreply.github.com> Claude <noreply@anthropic.com>
+Carlos A. Vazquez <283805441+charles-martech@users.noreply.github.com> <283805441+carlos-vazquez-27@users.noreply.github.com>
