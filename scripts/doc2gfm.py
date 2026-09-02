@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 
 IS_MAC = sys.platform == "darwin"
 IS_WINDOWS = sys.platform == "win32"
@@ -766,6 +766,20 @@ def save_diagram_pictures(src: Path, media_dir: Path,
     return saved
 
 
+def engine_advice(used: str, fell_back: bool, wants_media: bool) -> str:
+    """What to tell someone about the PDF reader, or "" for nothing.
+
+    Only worth saying when pymupdf4llm is not installed at all. After a fall
+    back it is installed and was read, and the warning recording what each
+    engine found already says so, so repeating "install pymupdf4llm" would
+    contradict it. Pictures are only mentioned when they were wanted.
+    """
+    if used != "pdftotext" or fell_back:
+        return ""
+    return ("install pymupdf4llm for better PDF text"
+            + (" and for diagrams saved as pictures" if wants_media else ""))
+
+
 def text_volume(pages: list[str]) -> int:
     """Roughly how much readable text an engine got, for comparing two of them."""
     return sum(len(WORD_CHAR_RE.findall(page)) for page in pages)
@@ -780,6 +794,7 @@ def convert_pdf(args: argparse.Namespace, src: Path, job: Job,
         order = [args.pdf_engine]
     pages: list[str] = []
     used = ""
+    fell_back = False
     errors: list[str] = []
     for engine in order:
         try:
@@ -831,6 +846,7 @@ def convert_pdf(args: argparse.Namespace, src: Path, job: Job,
                 f"read {plain_volume}; used pdftotext instead. A newer "
                 "pymupdf4llm keeps the text inside diagrams and tables.")
             pages, used = plain, "pdftotext"
+            fell_back = True
 
     pictures: dict[int, str] = {}
     if media_dir is not None:
@@ -839,10 +855,9 @@ def convert_pdf(args: argparse.Namespace, src: Path, job: Job,
             job.warnings.append(
                 f"{len(pictures)} page(s) with diagrams saved as pictures in "
                 f"{media_dir.name}/")
-    if used == "pdftotext" and not pictures:
-        job.warnings.append(
-            "install pymupdf4llm for better PDF text and for diagrams saved "
-            "as pictures")
+    advice = engine_advice(used, fell_back, media_dir is not None)
+    if advice:
+        job.warnings.append(advice)
     prefix = f"{media_dir.name}/" if media_dir is not None else ""
     return assemble_pdf(pages, pictures, prefix, args)
 

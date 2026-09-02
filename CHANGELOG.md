@@ -3,6 +3,18 @@
 Newest first. Dates are when the change landed on `main`, which is also when
 it reached anyone who runs the install line.
 
+## 1.2.2 — 2026-09-02
+
+### Fixed
+
+- **The report told people to install a reader they already had.** When
+  pymupdf4llm read a PDF but lost text, and the fuller `pdftotext` reading was
+  used instead, the run was then treated as though pymupdf4llm had been missing
+  all along and the report ended with "install pymupdf4llm" — directly
+  contradicting the line above it, which had just said what pymupdf4llm read.
+  That advice now appears only when pymupdf4llm really is absent, and mentions
+  diagram pictures only when pictures were asked for.
+
 ## 1.2.1 — 2026-09-02
 
 ### Changed
