@@ -495,10 +495,6 @@ class ConverterTest(unittest.TestCase):
 
     def test_a_document_where_every_page_looks_drawn_saves_none(self) -> None:
         """Some PyMuPDF versions count ruled prose pages as many shapes."""
-        try:
-            import pymupdf  # type: ignore
-        except ImportError:
-            self.skipTest("pymupdf is not installed")
         if pymupdf is None:
             self.skipTest("pymupdf is not installed")
         with tempfile.TemporaryDirectory() as tmp:
@@ -516,10 +512,6 @@ class ConverterTest(unittest.TestCase):
             self.assertEqual(doc2gfm.diagram_pages(everything), {})
 
     def test_a_few_drawn_pages_among_many_are_still_saved(self) -> None:
-        try:
-            import pymupdf  # type: ignore
-        except ImportError:
-            self.skipTest("pymupdf is not installed")
         if pymupdf is None:
             self.skipTest("pymupdf is not installed")
         with tempfile.TemporaryDirectory() as tmp:
