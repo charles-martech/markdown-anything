@@ -131,7 +131,9 @@ stable across runs.
 then `pdftotext -layout`. Choose one explicitly with `--pdf-engine`. How much text pymupdf4llm finds inside vector art depends on
 its version, and older ones drop it silently, so on `auto` its reading is
 compared against `pdftotext`'s where that is installed and the fuller one wins,
-with both counts recorded in the report.
+with both counts recorded in the report. Every pymupdf4llm that keeps that
+text needs Python 3.10, so on an older Python the report says so rather than
+suggesting an upgrade that cannot be installed.
 
 A PDF with no text layer fails with a note saying so. Re-run with `--ocr` and
 `ocrmypdf` installed to OCR it. Multi-column academic layouts interleave columns

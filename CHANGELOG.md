@@ -3,6 +3,18 @@
 Newest first. Dates are when the change landed on `main`, which is also when
 it reached anyone who runs the install line.
 
+## 1.2.4 — 2026-09-02
+
+### Fixed
+
+- **The app suggested an upgrade some computers cannot install.** Every
+  pymupdf4llm from 0.2.0 needs Python 3.10, so a Mac on the system Python 3.9
+  can install no newer than 0.0.27, which is one of the versions that drops the
+  text inside diagrams and tables. Both the report and the app's install offer
+  named a better pymupdf4llm regardless. The report now says the Python is the
+  limit instead, and the offer promises only the diagram pictures, which is what
+  installing it there actually wins.
+
 ## 1.2.3 — 2026-09-02
 
 ### Changed
