@@ -3,6 +3,21 @@
 Newest first. Dates are when the change landed on `main`, which is also when
 it reached anyone who runs the install line.
 
+## 1.2.1 — 2026-09-02
+
+### Fixed
+
+- **An updated app went on behaving like the old one, without saying so.** The
+  update replaces the app's files under a server that is already running, and
+  tells the person once, in the update log, to quit and open it again. The
+  converter is started from those files by path, so it is the new one straight
+  away, while the app around it keeps the old behaviour: a conversion run in
+  between writes `_conversion-report.md` and `_conversion-manifest.json` into
+  the converted folder, as 1.1.1 did, and offers none of what 1.2.0 added. The
+  page now compares the version it is running against the version installed on
+  disk and, when they differ, carries a notice saying to quit and open the app
+  again and that conversions behave like the old version until then.
+
 ## 1.2.0 — 2026-09-02
 
 ### Added
