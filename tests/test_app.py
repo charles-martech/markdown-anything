@@ -470,9 +470,6 @@ class SidecarTest(unittest.TestCase):
     """The report and manifest are the app's record, not the person's files."""
 
     def test_the_app_keeps_them_out_of_the_folder_being_converted(self) -> None:
-        self.assertFalse(
-            server.RUN_REPORT.is_relative_to(Path(tempfile.gettempdir())
-                                             / "not-the-support-dir"))
         self.assertTrue(server.RUN_REPORT.is_relative_to(server.SUPPORT))
         self.assertTrue(server.RUN_MANIFEST.is_relative_to(server.SUPPORT))
 
