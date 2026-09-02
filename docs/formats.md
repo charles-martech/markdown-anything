@@ -128,7 +128,10 @@ stable across runs.
 ## PDF
 
 `.pdf`, in engine order: pymupdf4llm (keeps headings and tables best), markitdown,
-then `pdftotext -layout`. Choose one explicitly with `--pdf-engine`.
+then `pdftotext -layout`. Choose one explicitly with `--pdf-engine`. How much text pymupdf4llm finds inside vector art depends on
+its version, and older ones drop it silently, so on `auto` its reading is
+compared against `pdftotext`'s where that is installed and the fuller one wins,
+with both counts recorded in the report.
 
 A PDF with no text layer fails with a note saying so. Re-run with `--ocr` and
 `ocrmypdf` installed to OCR it. Multi-column academic layouts interleave columns
@@ -143,7 +146,8 @@ twelve separate shapes over at least fifteen percent of the page is read as a
 diagram, and a picture of that page is saved into the same `.media` folder as
 embedded images and linked from the Markdown, in place of the scrambled text
 where the engine produced any. This needs pymupdf and is skipped under
-`--no-media`. `--pdf-picture-dpi` sets the resolution, 150 by default.
+`--no-media`. When more than three quarters of a document's pages qualify the
+measure is not telling pages apart, and none are saved. `--pdf-picture-dpi` sets the resolution, 150 by default.
 
 ## Lightweight markup formats
 

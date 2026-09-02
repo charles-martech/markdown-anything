@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 
 IS_MAC = sys.platform == "darwin"
 IS_WINDOWS = sys.platform == "win32"
@@ -644,6 +644,13 @@ def convert_sheet(args: argparse.Namespace, src: Path, job: Job,
 # rules are discounted, so the two separate cleanly.
 DIAGRAM_MIN_SHAPES = 12
 DIAGRAM_MIN_PAGE_FRACTION = 0.15
+# pdftotext reading this much more than pymupdf4llm means pymupdf4llm is
+# dropping text rather than reading the page differently.
+PDF_TEXT_LOSS_RATIO = 1.5
+# Above this share of a document's pages, the diagram measure is matching
+# everything and so distinguishing nothing.
+DIAGRAM_MAX_SHARE = 0.75
+DIAGRAM_MIN_PAGES_TO_JUDGE = 4
 
 
 def _pdf_via_pymupdf(src: Path) -> list[str] | None:
@@ -730,6 +737,14 @@ def diagram_pages(src: Path) -> dict[int, "object"]:
                 found[number] = page
         except Exception:  # noqa: BLE001,S112 - one unreadable page, not a failure
             continue
+    # How finely PyMuPDF splits a drawing into shapes varies by version, and on
+    # some of them an ordinary page of prose and ruled tables counts as many
+    # shapes. When nearly every page in a long document looks like a diagram,
+    # the measure is not telling them apart, and a picture of every page is
+    # not what anyone asked for: better to save none than all of them.
+    pages = len(doc)
+    if pages > DIAGRAM_MIN_PAGES_TO_JUDGE and len(found) > pages * DIAGRAM_MAX_SHARE:
+        return {}
     return found
 
 
@@ -749,6 +764,11 @@ def save_diagram_pictures(src: Path, media_dir: Path,
             continue
         saved[number] = name
     return saved
+
+
+def text_volume(pages: list[str]) -> int:
+    """Roughly how much readable text an engine got, for comparing two of them."""
+    return sum(len(WORD_CHAR_RE.findall(page)) for page in pages)
 
 
 def convert_pdf(args: argparse.Namespace, src: Path, job: Job,
@@ -795,6 +815,23 @@ def convert_pdf(args: argparse.Namespace, src: Path, job: Job,
                 "ocrmypdf installed")
         raise ConversionError("; ".join(errors) or hint)
 
+    # How much text pymupdf4llm finds inside vector art depends on its
+    # version: some drop it silently, and a page laid out as a drawn table
+    # then arrives nearly empty. That is not visible in the output, so where
+    # pdftotext is available the two are compared and the fuller reading wins.
+    if used == "pymupdf" and args.pdf_engine == "auto" and find_tool("pdftotext"):
+        try:
+            plain = _pdf_via_pdftotext(args, src, job)
+        except (ConversionError, subprocess.SubprocessError, OSError):
+            plain = []
+        rich_volume, plain_volume = text_volume(pages), text_volume(plain)
+        if plain_volume > rich_volume * PDF_TEXT_LOSS_RATIO:
+            job.warnings.append(
+                f"pymupdf4llm read {rich_volume} characters where pdftotext "
+                f"read {plain_volume}; used pdftotext instead. A newer "
+                "pymupdf4llm keeps the text inside diagrams and tables.")
+            pages, used = plain, "pdftotext"
+
     pictures: dict[int, str] = {}
     if media_dir is not None:
         pictures = save_diagram_pictures(src, media_dir, args.pdf_picture_dpi)
@@ -813,6 +850,9 @@ def convert_pdf(args: argparse.Namespace, src: Path, job: Job,
 # pymupdf4llm wraps the text it scrapes out of vector art in these markers.
 # The text inside follows the drawing order, not any reading order, so it
 # arrives as scrambled fragments, sometimes with labels reversed.
+WORD_CHAR_RE = re.compile(r"\w")
+
+
 PICTURE_TEXT_RE = re.compile(
     r"<!-- Start of picture text -->.*?<!-- End of picture text -->",
     re.DOTALL)
@@ -836,12 +876,18 @@ def assemble_pdf(pages: list[str], pictures: dict[int, str],
                     f"({prefix}{picture})")
             # Where the engine scraped the diagram's own text, the picture
             # belongs in its place: the picture is readable and that text is
-            # not. Otherwise the picture goes after the page it came from.
-            page, replaced = PICTURE_TEXT_RE.subn(link, page)
+            # not. Only the first block is replaced, because the picture is of
+            # the whole page and one copy of it stands for every diagram on
+            # that page; the rest are left as they are rather than deleted,
+            # since scraped text is still the page's content.
+            page, replaced = PICTURE_TEXT_RE.subn(link, page, count=1)
             page = page.strip()
-            chunks.append(page if page else link)
             if not replaced:
-                chunks.append(link)
+                # Nothing to stand in for, so the picture follows the page. A
+                # page drawn entirely as vector art has no text at all, and
+                # must still end up with exactly one picture.
+                page = f"{page}\n\n{link}" if page else link
+            chunks.append(page)
         elif page:
             chunks.append(page)
     return "\n\n".join(chunks).strip() + "\n"

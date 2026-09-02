@@ -807,11 +807,25 @@ def settings_for_page() -> dict:
         last = 0.0
     due = (time.time() - last) > CHECK_INTERVAL
     return {"version": VERSION,
+            "installedVersion": installed_version(),
             "platform": PLATFORM,
             "fileManager": FILE_MANAGER,
             "examplePath": str(Path.home() / "Documents" / "report.pdf"),
             "autoCheck": auto if isinstance(auto, bool) else None,
             "checkNow": auto is True and due}
+
+
+def installed_version() -> str:
+    """The version sitting in the bundle now, which may not be the one running.
+
+    An update replaces the bundle under a server that is already running, and
+    VERSION was read once at import. The converter is started from the bundle
+    by path, so it is the new one immediately, while this process keeps the old
+    behaviour around it until someone quits and opens the app again. That pair
+    converts files in ways neither version would on its own, so the page says
+    so rather than leaving it to be discovered in the output folder.
+    """
+    return read_stamp("VERSION", VERSION)
 
 
 def set_auto_check(enabled: bool) -> dict:

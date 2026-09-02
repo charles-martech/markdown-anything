@@ -469,6 +469,100 @@ class ConverterTest(unittest.TestCase):
     def test_a_missing_pdf_never_raises_from_the_diagram_check(self) -> None:
         self.assertEqual(doc2gfm.diagram_pages(Path("no-such-file.pdf")), {})
 
+    def test_a_page_never_carries_the_same_picture_twice(self) -> None:
+        """A page drawn entirely as vector art has no text to stand it beside."""
+        for page in ("",
+                     "just words",
+                     "<!-- Start of picture text -->x<!-- End of picture text -->",
+                     "<!-- Start of picture text -->x<!-- End of picture text -->"
+                     "\n\nmid\n\n"
+                     "<!-- Start of picture text -->y<!-- End of picture text -->"):
+            out = doc2gfm.assemble_pdf([page], {1: "page-001.png"}, "d.media/",
+                                       self._pdf_args())
+            self.assertEqual(out.count("page-001.png"), 1, page[:40])
+
+    def test_a_second_scraped_block_is_kept_rather_than_deleted(self) -> None:
+        page = ("<!-- Start of picture text -->first<!-- End of picture text -->"
+                "\n\n<!-- Start of picture text -->second<!-- End of picture text -->")
+        out = doc2gfm.assemble_pdf([page], {1: "page-001.png"}, "d.media/",
+                                   self._pdf_args())
+        self.assertNotIn("first", out)
+        self.assertIn("second", out)
+
+    def test_text_volume_counts_words_not_markup(self) -> None:
+        self.assertEqual(doc2gfm.text_volume(["## ab |---| cd"]), 4)
+        self.assertEqual(doc2gfm.text_volume([]), 0)
+
+    def test_a_document_where_every_page_looks_drawn_saves_none(self) -> None:
+        """Some PyMuPDF versions count ruled prose pages as many shapes."""
+        if pymupdf is None:
+            self.skipTest("pymupdf is not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            everything = Path(tmp) / "everything.pdf"
+            doc = pymupdf.open()
+            for _ in range(8):
+                page = doc.new_page()
+                for row in range(6):
+                    for column in range(5):
+                        page.draw_rect(pymupdf.Rect(40 + column * 100,
+                                                    40 + row * 120,
+                                                    120 + column * 100,
+                                                    110 + row * 120))
+            doc.save(str(everything))
+            self.assertEqual(doc2gfm.diagram_pages(everything), {})
+
+    def test_a_few_drawn_pages_among_many_are_still_saved(self) -> None:
+        if pymupdf is None:
+            self.skipTest("pymupdf is not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            mixed = Path(tmp) / "mixed.pdf"
+            doc = pymupdf.open()
+            for index in range(8):
+                page = doc.new_page()
+                if index in (2, 5):
+                    for row in range(6):
+                        for column in range(5):
+                            page.draw_rect(pymupdf.Rect(40 + column * 100,
+                                                        40 + row * 120,
+                                                        120 + column * 100,
+                                                        110 + row * 120))
+                else:
+                    page.insert_text((72, 72), "nothing but words")
+            doc.save(str(mixed))
+            self.assertEqual(list(doc2gfm.diagram_pages(mixed)), [3, 6])
+
+
+class StaleProcessTest(unittest.TestCase):
+    """An update replaces the bundle under a server that is already running."""
+
+    def test_matching_versions_say_nothing(self) -> None:
+        self.assertEqual(server.installed_version(), server.VERSION)
+        self.assertEqual(server.settings_for_page()["installedVersion"],
+                         server.VERSION)
+
+    def test_a_newer_bundle_on_disk_is_reported(self) -> None:
+        stamp = server.ROOT / "VERSION"
+        original = stamp.read_text(encoding="utf-8")
+        try:
+            stamp.write_text("99.0.0\n", encoding="utf-8")
+            self.assertEqual(server.installed_version(), "99.0.0")
+            payload = server.settings_for_page()
+            self.assertEqual(payload["installedVersion"], "99.0.0")
+            # The running version is the one read at import, not re-read here.
+            self.assertEqual(payload["version"], server.VERSION)
+            self.assertNotEqual(payload["installedVersion"], payload["version"])
+        finally:
+            stamp.write_text(original, encoding="utf-8")
+
+    def test_an_unreadable_stamp_reports_the_running_version(self) -> None:
+        stamp = server.ROOT / "VERSION"
+        original = stamp.read_text(encoding="utf-8")
+        try:
+            stamp.unlink()
+            self.assertEqual(server.installed_version(), server.VERSION)
+        finally:
+            stamp.write_text(original, encoding="utf-8")
+
 
 class SidecarTest(unittest.TestCase):
     """The report and manifest are the app's record, not the person's files."""
