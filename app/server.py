@@ -65,6 +65,13 @@ def default_support_dir() -> Path:
     return Path.home() / ".local/share/document-to-markdown"
 
 
+# The Python a pymupdf4llm that keeps the text inside vector art needs. Every
+# pymupdf4llm from 0.2.0, and every pymupdf from 1.28, requires 3.10; 0.0.27
+# and pymupdf 1.26.5 are the last for 3.9 and they drop that text.
+# scripts/doc2gfm.py works this out the same way for the warnings it records.
+# Change one and change the other.
+READER_NEEDS_PYTHON = (3, 10)
+
 # Everything this app installs for itself lives here, never on the system.
 # Deleting this folder undoes every install the app has ever done.
 # DOC2MD_HOME relocates everything this app installs and remembers. The server
@@ -478,13 +485,21 @@ def engine_status() -> list[dict]:
     # the app can fetch by itself. Someone with pdftotext only still converts
     # PDFs; the offer to add this is worth making to them anyway.
     pdf_ready = python_module_available("pymupdf4llm")
+    # What that offer wins depends on the Python. Below READER_NEEDS_PYTHON the
+    # newest pymupdf4llm this machine can install is one that drops the text
+    # inside vector art, which the converter then discards in favour of
+    # pdftotext, so only the diagram pictures are gained and the offer must not
+    # promise the rest.
+    pdf_purpose = ("PDF diagrams, and better headings and tables from PDFs"
+                   if sys.version_info >= READER_NEEDS_PYTHON
+                   else "diagrams in PDFs, saved as pictures")
     return [
         {"key": "pandoc", "name": "Pandoc", "required": True,
          "ok": bool(tool_path("pandoc")), "install": True,
          "purpose": "Word documents, web pages, ebooks, wikis and most other formats"},
         {"key": "pdf", "name": "PDF reader", "required": False,
          "ok": pdf_ready, "install": True,
-         "purpose": "PDF diagrams, and better headings and tables from PDFs"},
+         "purpose": pdf_purpose},
         {"key": "excel", "name": "Spreadsheet reader", "required": False,
          "ok": python_module_available("openpyxl"), "install": True,
          "purpose": "Excel sheet names and headers"},

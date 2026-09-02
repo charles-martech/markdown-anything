@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-VERSION = "1.2.3"
+VERSION = "1.2.4"
 
 IS_MAC = sys.platform == "darwin"
 IS_WINDOWS = sys.platform == "win32"
@@ -651,6 +651,13 @@ DIAGRAM_MIN_PAGE_FRACTION = 0.15
 # pdftotext reading this much more than pymupdf4llm means pymupdf4llm is
 # dropping text rather than reading the page differently.
 PDF_TEXT_LOSS_RATIO = 1.5
+# The Python a pymupdf4llm that keeps the text inside vector art needs.
+# Every pymupdf4llm from 0.2.0, and every pymupdf from 1.28, requires 3.10;
+# 0.0.27 and pymupdf 1.26.5 are the last for 3.9, and they drop that text.
+# On an older Python there is nothing better to install, so nothing here
+# may suggest there is. app/server.py works this out the same way for the
+# engine it offers to fetch. Change one and change the other.
+READER_NEEDS_PYTHON = (3, 10)
 # Above this share of a document's pages, the diagram measure is matching
 # everything and so distinguishing nothing.
 DIAGRAM_MAX_SHARE = 0.75
@@ -772,18 +779,43 @@ def save_diagram_pictures(src: Path, media_dir: Path,
     return saved
 
 
+def newer_reader_installable() -> bool:
+    """Whether this Python can take a pymupdf4llm that keeps vector-art text."""
+    return sys.version_info >= READER_NEEDS_PYTHON
+
+
+def reader_ceiling_note() -> str:
+    """Why the text pymupdf4llm lost is not going to be recovered here."""
+    if newer_reader_installable():
+        return "A newer pymupdf4llm keeps the text inside diagrams and tables."
+    return (f"Python {sys.version_info.major}.{sys.version_info.minor} cannot "
+            f"install a pymupdf4llm that keeps it, which needs Python "
+            f"{READER_NEEDS_PYTHON[0]}.{READER_NEEDS_PYTHON[1]}.")
+
+
 def engine_advice(used: str, fell_back: bool, wants_media: bool) -> str:
     """What to tell someone about the PDF reader, or "" for nothing.
 
     Only worth saying when pymupdf4llm is not installed at all. After a fall
     back it is installed and was read, and the warning recording what each
     engine found already says so, so repeating "install pymupdf4llm" would
-    contradict it. Pictures are only mentioned when they were wanted.
+    contradict it.
+
+    What installing it would win depends on the Python. Below
+    READER_NEEDS_PYTHON only the diagram pictures are gained, since the text
+    from the version that Python can take loses to pdftotext and is discarded;
+    promising better text there would be promising something unobtainable.
     """
     if used != "pdftotext" or fell_back:
         return ""
-    return ("install pymupdf4llm for better PDF text"
-            + (" and for diagrams saved as pictures" if wants_media else ""))
+    gains = []
+    if newer_reader_installable():
+        gains.append("better PDF text")
+    if wants_media:
+        gains.append("diagrams saved as pictures")
+    if not gains:
+        return ""
+    return "install pymupdf4llm for " + " and for ".join(gains)
 
 
 def text_volume(pages: list[str]) -> int:
@@ -849,8 +881,8 @@ def convert_pdf(args: argparse.Namespace, src: Path, job: Job,
         if plain_volume > rich_volume * PDF_TEXT_LOSS_RATIO:
             job.warnings.append(
                 f"pymupdf4llm read {rich_volume} characters where pdftotext "
-                f"read {plain_volume}; used pdftotext instead. A newer "
-                "pymupdf4llm keeps the text inside diagrams and tables.")
+                f"read {plain_volume}; used pdftotext instead. "
+                + reader_ceiling_note())
             pages, used = plain, "pdftotext"
             fell_back = True
 

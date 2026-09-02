@@ -20,6 +20,7 @@ import tempfile
 import time
 import threading
 import unittest
+import unittest.mock
 import zipfile
 from pathlib import Path
 
@@ -46,6 +47,13 @@ try:
     import pymupdf  # type: ignore
 except ImportError:
     pymupdf = None
+
+def _python(major: int, minor: int):
+    """A stand-in for sys.version_info; the real type cannot be constructed."""
+    import collections
+    return collections.namedtuple(
+        "V", "major minor micro releaselevel serial")(major, minor, 0, "final", 0)
+
 
 server = _load("mda_server", ROOT / "app" / "server.py")
 doc2gfm = _load("mda_doc2gfm", ROOT / "scripts" / "doc2gfm.py")
@@ -504,13 +512,20 @@ class ConverterTest(unittest.TestCase):
         self.assertEqual(doc2gfm.engine_advice("pdftotext", True, False), "")
 
     def test_the_reader_advice_appears_when_it_is_really_missing(self) -> None:
-        self.assertIn("better PDF text",
-                      doc2gfm.engine_advice("pdftotext", False, True))
-        self.assertIn("diagrams saved as pictures",
-                      doc2gfm.engine_advice("pdftotext", False, True))
+        # What the advice offers depends on the Python, so it is fixed here
+        # rather than inherited from whichever one runs the suite. The version
+        # below READER_NEEDS_PYTHON is ReaderCeilingTest's.
+        with unittest.mock.patch.object(doc2gfm.sys, "version_info",
+                                        _python(3, 10)):
+            self.assertIn("better PDF text",
+                          doc2gfm.engine_advice("pdftotext", False, True))
+            self.assertIn("diagrams saved as pictures",
+                          doc2gfm.engine_advice("pdftotext", False, True))
 
     def test_the_reader_advice_omits_pictures_nobody_asked_for(self) -> None:
-        advice = doc2gfm.engine_advice("pdftotext", False, False)
+        with unittest.mock.patch.object(doc2gfm.sys, "version_info",
+                                        _python(3, 10)):
+            advice = doc2gfm.engine_advice("pdftotext", False, False)
         self.assertIn("better PDF text", advice)
         self.assertNotIn("pictures", advice)
 
@@ -575,6 +590,52 @@ class ConverterTest(unittest.TestCase):
                     page.insert_text((72, 72), "nothing but words")
             doc.save(str(mixed))
             self.assertEqual(list(doc2gfm.diagram_pages(mixed)), [3, 6])
+
+
+class ReaderCeilingTest(unittest.TestCase):
+    """What to say when the Python cannot take a reader worth upgrading to."""
+
+    def test_a_python_that_can_take_a_newer_reader(self) -> None:
+        with unittest.mock.patch.object(doc2gfm.sys, "version_info",
+                                        _python(3, 10)):
+            self.assertTrue(doc2gfm.newer_reader_installable())
+            self.assertIn("A newer pymupdf4llm", doc2gfm.reader_ceiling_note())
+            self.assertIn("better PDF text",
+                          doc2gfm.engine_advice("pdftotext", False, False))
+
+    def test_a_python_that_cannot(self) -> None:
+        with unittest.mock.patch.object(doc2gfm.sys, "version_info",
+                                        _python(3, 9)):
+            self.assertFalse(doc2gfm.newer_reader_installable())
+            note = doc2gfm.reader_ceiling_note()
+            self.assertIn("Python 3.9 cannot install", note)
+            self.assertIn("needs Python 3.10", note)
+
+    def test_only_pictures_are_promised_on_an_older_python(self) -> None:
+        with unittest.mock.patch.object(doc2gfm.sys, "version_info",
+                                        _python(3, 9)):
+            advice = doc2gfm.engine_advice("pdftotext", False, True)
+            self.assertIn("diagrams saved as pictures", advice)
+            self.assertNotIn("better PDF text", advice)
+            # Nothing at all is gained where pictures were not wanted.
+            self.assertEqual(doc2gfm.engine_advice("pdftotext", False, False),
+                             "")
+
+    def test_the_app_offers_only_what_the_python_can_deliver(self) -> None:
+        def purpose():
+            return next(e for e in server.engine_status()
+                        if e["key"] == "pdf")["purpose"]
+        with unittest.mock.patch.object(server.sys, "version_info",
+                                        _python(3, 9)):
+            self.assertNotIn("headings and tables", purpose())
+            self.assertIn("diagrams", purpose())
+        with unittest.mock.patch.object(server.sys, "version_info",
+                                        _python(3, 11)):
+            self.assertIn("headings and tables", purpose())
+
+    def test_both_files_agree_on_the_ceiling(self) -> None:
+        self.assertEqual(doc2gfm.READER_NEEDS_PYTHON,
+                         server.READER_NEEDS_PYTHON)
 
 
 class StaleProcessTest(unittest.TestCase):
