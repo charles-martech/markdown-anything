@@ -136,6 +136,15 @@ under `pdftotext`; pymupdf4llm handles them better. `--pdf-page-marks` keeps
 `<!-- page N -->` comments, useful when the markdown has to be checked against
 the original.
 
+Diagrams — flowcharts, org charts, architecture drawings — are vector art, not
+embedded images, so there is nothing to extract and their labels come out in
+drawing order as scrambled fragments. A page holding at least
+twelve separate shapes over at least fifteen percent of the page is read as a
+diagram, and a picture of that page is saved into the same `.media` folder as
+embedded images and linked from the Markdown, in place of the scrambled text
+where the engine produced any. This needs pymupdf and is skipped under
+`--no-media`. `--pdf-picture-dpi` sets the resolution, 150 by default.
+
 ## Lightweight markup formats
 
 Markdown flavours, djot, Muse, Textile, txt2tags, reStructuredText, Org and

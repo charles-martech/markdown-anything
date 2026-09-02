@@ -3,6 +3,38 @@
 Newest first. Dates are when the change landed on `main`, which is also when
 it reached anyone who runs the install line.
 
+## 1.2.0 — 2026-09-02
+
+### Added
+
+- **Diagrams in PDFs survive the conversion.** A flowchart, org chart or
+  architecture drawing in a PDF is vector art rather than an embedded image, so
+  there was nothing to extract and its labels came through in drawing order as
+  scrambled fragments, sometimes reversed. Pages that hold a diagram are now
+  saved as pictures into the same `.media` folder as embedded images and linked
+  from the Markdown, standing in for the scrambled text where the reader
+  produced any. `--pdf-picture-dpi` sets the resolution; `--no-media` turns it
+  off along with embedded images.
+- `--no-sidecars` on the converter, which writes neither the report nor the
+  manifest.
+
+### Changed
+
+- **The two `_conversion-*` files no longer land in the converted folder.** The
+  app keeps the report and the manifest in its own folder, so a conversion
+  leaves nothing behind but the Markdown, the pictures, and no clean-up. The
+  **See the full report** button and the link to a single converted file work
+  exactly as before. Run from a terminal, the converter still writes both next
+  to the output unless told otherwise.
+- **Every option says whether it starts on or off, and why.** The panel is no
+  longer headed "the defaults are fine": each option gives the reason for its
+  default, so leaving one alone is a decision rather than a guess. "Save
+  embedded images" is now "Save pictures and diagrams", which is what it does.
+- **The PDF reader the app offers to install is the one that reads diagrams.**
+  Having `pdftotext` alone counted as ready, which left people with the weakest
+  PDF text and no diagrams and never offered them better. The app now offers to
+  add pymupdf4llm, which also gets headings and tables right.
+
 ## 1.1.1 — 2026-09-02
 
 ### Added

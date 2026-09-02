@@ -392,6 +392,117 @@ class ConverterTest(unittest.TestCase):
         rows = doc2gfm._gfm_table([["a|b", "c"], ["d", "e"]])
         self.assertIn("a\\|b", rows[0])
 
+    @staticmethod
+    def _pdf_args(**over):
+        base = {"pdf_page_marks": False}
+        base.update(over)
+        return type("Args", (), base)()
+
+    def test_a_diagram_picture_replaces_the_text_scraped_out_of_it(self) -> None:
+        """The scraped text is drawing-order gibberish; the picture is not."""
+        page = ("Before\n\n<!-- Start of picture text -->\nsey / otro box\n"
+                "<!-- End of picture text -->\n\nAfter")
+        out = doc2gfm.assemble_pdf([page], {1: "page-001.png"}, "d.media/",
+                                   self._pdf_args())
+        self.assertIn("![Diagram on page 1 of the original PDF]"
+                      "(d.media/page-001.png)", out)
+        self.assertNotIn("sey / otro box", out)
+        self.assertIn("Before", out)
+        self.assertIn("After", out)
+
+    def test_a_diagram_picture_follows_a_page_it_could_not_be_placed_in(self) -> None:
+        out = doc2gfm.assemble_pdf(["Just words"], {1: "page-001.png"},
+                                   "d.media/", self._pdf_args())
+        self.assertLess(out.index("Just words"), out.index("page-001.png"))
+
+    def test_pages_without_a_diagram_are_left_alone(self) -> None:
+        out = doc2gfm.assemble_pdf(["one", "", "two"], {}, "", self._pdf_args())
+        self.assertEqual(out, "one\n\ntwo\n")
+
+    def test_page_marks_stay_optional(self) -> None:
+        self.assertNotIn("<!-- page", doc2gfm.assemble_pdf(
+            ["one"], {}, "", self._pdf_args()))
+        self.assertIn("<!-- page 1 -->", doc2gfm.assemble_pdf(
+            ["one"], {}, "", self._pdf_args(pdf_page_marks=True)))
+
+    def test_a_pdf_without_vector_art_yields_no_diagram_pages(self) -> None:
+        try:
+            import pymupdf  # type: ignore
+        except ImportError:
+            self.skipTest("pymupdf is not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            plain = Path(tmp) / "plain.pdf"
+            doc = pymupdf.open()
+            doc.new_page().insert_text((72, 72), "nothing but words")
+            doc.save(str(plain))
+            self.assertEqual(doc2gfm.diagram_pages(plain), {})
+            self.assertEqual(
+                doc2gfm.save_diagram_pictures(plain, Path(tmp) / "m", 72), {})
+            self.assertFalse((Path(tmp) / "m").exists())
+
+    def test_a_pdf_full_of_boxes_is_read_as_a_diagram(self) -> None:
+        try:
+            import pymupdf  # type: ignore
+        except ImportError:
+            self.skipTest("pymupdf is not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            chart = Path(tmp) / "chart.pdf"
+            doc = pymupdf.open()
+            page = doc.new_page()
+            for row in range(6):
+                for column in range(5):
+                    page.draw_rect(pymupdf.Rect(40 + column * 100,
+                                                40 + row * 120,
+                                                120 + column * 100,
+                                                110 + row * 120))
+            doc.save(str(chart))
+            self.assertEqual(list(doc2gfm.diagram_pages(chart)), [1])
+            media = Path(tmp) / "m"
+            self.assertEqual(doc2gfm.save_diagram_pictures(chart, media, 72),
+                             {1: "page-001.png"})
+            self.assertTrue((media / "page-001.png").is_file())
+
+    def test_a_missing_pdf_never_raises_from_the_diagram_check(self) -> None:
+        self.assertEqual(doc2gfm.diagram_pages(Path("no-such-file.pdf")), {})
+
+
+class SidecarTest(unittest.TestCase):
+    """The report and manifest are the app's record, not the person's files."""
+
+    def test_the_app_keeps_them_out_of_the_folder_being_converted(self) -> None:
+        self.assertFalse(
+            server.RUN_REPORT.is_relative_to(Path(tempfile.gettempdir())
+                                             / "not-the-support-dir"))
+        self.assertTrue(server.RUN_REPORT.is_relative_to(server.SUPPORT))
+        self.assertTrue(server.RUN_MANIFEST.is_relative_to(server.SUPPORT))
+
+    def test_the_converter_can_be_told_to_write_neither(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "in"
+            source.mkdir()
+            (source / "a.txt").write_text("hi\n")
+            out = Path(tmp) / "out"
+            code = doc2gfm.main(["-q", "-o", str(out), "--no-sidecars",
+                                 "--", str(source)])
+            self.assertEqual(code, 0)
+            self.assertEqual(sorted(p.name for p in out.iterdir()), ["a.md"])
+
+    def test_the_converter_still_writes_them_where_it_is_told(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "in"
+            source.mkdir()
+            (source / "a.txt").write_text("hi\n")
+            report = Path(tmp) / "elsewhere" / "r.md"
+            manifest = Path(tmp) / "elsewhere" / "m.json"
+            doc2gfm.main(["-q", "-o", str(tmp) + "/out",
+                          "--report", str(report), "--manifest", str(manifest),
+                          "--", str(source)])
+            self.assertTrue(report.is_file())
+            self.assertIn("files", json.loads(manifest.read_text()))
+            self.assertEqual(
+                sorted(p.name for p in (Path(tmp) / "out").iterdir()),
+                ["a.md"])
+
 
 class ChoosingTest(unittest.TestCase):
     """Files and folders as the page sends them, and where the output goes."""
@@ -472,19 +583,19 @@ class ChoosingTest(unittest.TestCase):
 
     def test_the_outputs_come_from_the_manifest_and_nothing_else(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertEqual(server.manifest_outputs(tmp), [])
-            self.assertEqual(server.manifest_outputs(""), [])
-            manifest = Path(tmp) / "_conversion-manifest.json"
+            manifest = Path(tmp) / "manifest.json"
+            self.assertEqual(server.manifest_outputs(manifest), [])
             manifest.write_text("{not json")
-            self.assertEqual(server.manifest_outputs(tmp), [])
+            self.assertEqual(server.manifest_outputs(manifest), [])
             manifest.write_text(json.dumps({"files": [
                 {"source": "/s/a.pdf", "output": "/o/a.md", "status": "converted"},
                 {"source": "/s/b.pdf", "output": "/o/b.md", "status": "unchanged"},
                 {"source": "/s/c.png", "output": None, "status": "skipped"},
                 {"source": "/s/d.pdf", "output": "/o/d.md", "status": "failed"},
                 "junk"]}))
-            self.assertEqual([o["output"] for o in server.manifest_outputs(tmp)],
-                             ["/o/a.md", "/o/b.md"])
+            self.assertEqual(
+                [o["output"] for o in server.manifest_outputs(manifest)],
+                ["/o/a.md", "/o/b.md"])
 
 
 def minimal_pptx(path: Path) -> None:

@@ -109,8 +109,9 @@ allowed to replace one that already does.
 3. **Convert.** Watch the progress, then click through to the result: the
    folder, or, when you converted one file, that file.
 
-Options are all optional and written in plain language. The defaults are right
-for almost everyone.
+Options are all optional and written in plain language. Each one says whether it
+starts on or off and why, so there is nothing to guess at. Only one, saving
+pictures and diagrams, is on to begin with.
 
 ## What it converts
 
@@ -134,6 +135,11 @@ each format, and what to expect from the result.
 Slides keep their titles, bullet levels, tables and speaker notes. Spreadsheets
 become one table per sheet, under the sheet's own name. Embedded images are
 saved next to each Markdown file with the links already pointing at them.
+
+A diagram in a PDF is drawn, not written, so its labels arrive as scrambled
+fragments no reader can follow. Pages that hold a flowchart, an org chart or an
+architecture drawing are saved as pictures alongside those images and linked
+from the Markdown where the scrambled text would have been.
 
 ## Things it does that matter on a real folder
 
