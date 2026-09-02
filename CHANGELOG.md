@@ -5,6 +5,18 @@ it reached anyone who runs the install line.
 
 ## 1.2.1 — 2026-09-02
 
+### Changed
+
+- **The keyboard now shows where it is.** Nothing styled `:focus`, so on
+  controls carrying their own borders the browser's ring was easy to lose.
+  Links, buttons, checkboxes, text fields and the options summary all draw the
+  same accent outline when reached by keyboard. Buttons also press in on click,
+  and that and the progress bar hold still under `prefers-reduced-motion`.
+- **The footer is a landmark again.** It sat inside `<main>`, where a screen
+  reader does not expose it as one, although it holds controls for the app
+  rather than anything `<main>` describes. It is now a sibling of `<main>` and
+  keeps its width and centring from the stylesheet rather than inline styles.
+
 ### Fixed
 
 - **A PDF could come out with most of its text missing.** How much text
