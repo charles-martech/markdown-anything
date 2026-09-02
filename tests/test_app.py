@@ -48,6 +48,13 @@ try:
 except ImportError:
     pymupdf = None
 
+def _python(major: int, minor: int):
+    """A stand-in for sys.version_info; the real type cannot be constructed."""
+    import collections
+    return collections.namedtuple(
+        "V", "major minor micro releaselevel serial")(major, minor, 0, "final", 0)
+
+
 server = _load("mda_server", ROOT / "app" / "server.py")
 doc2gfm = _load("mda_doc2gfm", ROOT / "scripts" / "doc2gfm.py")
 
@@ -505,13 +512,20 @@ class ConverterTest(unittest.TestCase):
         self.assertEqual(doc2gfm.engine_advice("pdftotext", True, False), "")
 
     def test_the_reader_advice_appears_when_it_is_really_missing(self) -> None:
-        self.assertIn("better PDF text",
-                      doc2gfm.engine_advice("pdftotext", False, True))
-        self.assertIn("diagrams saved as pictures",
-                      doc2gfm.engine_advice("pdftotext", False, True))
+        # What the advice offers depends on the Python, so it is fixed here
+        # rather than inherited from whichever one runs the suite. The version
+        # below READER_NEEDS_PYTHON is ReaderCeilingTest's.
+        with unittest.mock.patch.object(doc2gfm.sys, "version_info",
+                                        _python(3, 10)):
+            self.assertIn("better PDF text",
+                          doc2gfm.engine_advice("pdftotext", False, True))
+            self.assertIn("diagrams saved as pictures",
+                          doc2gfm.engine_advice("pdftotext", False, True))
 
     def test_the_reader_advice_omits_pictures_nobody_asked_for(self) -> None:
-        advice = doc2gfm.engine_advice("pdftotext", False, False)
+        with unittest.mock.patch.object(doc2gfm.sys, "version_info",
+                                        _python(3, 10)):
+            advice = doc2gfm.engine_advice("pdftotext", False, False)
         self.assertIn("better PDF text", advice)
         self.assertNotIn("pictures", advice)
 
@@ -576,13 +590,6 @@ class ConverterTest(unittest.TestCase):
                     page.insert_text((72, 72), "nothing but words")
             doc.save(str(mixed))
             self.assertEqual(list(doc2gfm.diagram_pages(mixed)), [3, 6])
-
-
-def _python(major: int, minor: int):
-    """A stand-in for sys.version_info; the real type cannot be constructed."""
-    import collections
-    return collections.namedtuple(
-        "V", "major minor micro releaselevel serial")(major, minor, 0, "final", 0)
 
 
 class ReaderCeilingTest(unittest.TestCase):
